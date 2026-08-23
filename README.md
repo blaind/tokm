@@ -16,8 +16,8 @@ $ tokm .
  Total                 9  14,333   100.0%
 ```
 
-The first release series provides the Rust core library, native CLI, typed Python bindings, and
-local Hugging Face `tokenizer.json` support. Git tree diffs follow in a later phase.
+The first release series provides the Rust core library, native CLI, typed Python bindings, local
+Hugging Face `tokenizer.json` support, and Git tree diffs.
 
 ## Usage
 
@@ -68,6 +68,35 @@ Files larger than 20 MiB are skipped visibly. The limit accepts binary K/M/G suf
 ```console
 tokm dataset --max-file-size 100M
 tokm dataset --max-file-size unlimited
+```
+
+## Git token diff
+
+Compare a committed tree with the current worktree:
+
+```console
+tokm diff origin/main
+```
+
+The worktree form includes modified tracked files and untracked, non-ignored files. Compare only
+committed states with an explicit two-tree range:
+
+```console
+tokm diff origin/main..HEAD
+tokm diff v1.0.0..v1.1.0 --files
+```
+
+Both forms scan complete file contents under the same tokenizer and text policy, then compare the
+two snapshots. They do not tokenize line-oriented patch hunks. Git objects are read through `gix`;
+the Git executable is not invoked by normal operation. Content-addressed caching lets unchanged
+blobs reuse prior counts.
+
+Use `--repository PATH` when discovery should begin somewhere other than the current directory.
+All regular measurement selectors and filters remain available after `diff`.
+
+```console
+tokm diff main --tokenizer-file ./tokenizer.json
+tokm diff main..HEAD --format json | jq '.tokens.net'
 ```
 
 ## JSON and CI
@@ -157,12 +186,19 @@ println!("{}", result.totals.tokens);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Heavy future integrations remain feature-gated. A minimal consumer can omit built-in tokenizers and
-the persistent cache:
+Heavy integrations remain feature-gated. A minimal consumer can omit built-in tokenizers, the
+persistent cache, Hugging Face support, and Git:
 
 ```toml
 [dependencies]
 tokm-core = { version = "0.1", default-features = false }
+```
+
+Enable committed-tree scanning and snapshot comparison explicitly:
+
+```toml
+[dependencies]
+tokm-core = { version = "0.1", features = ["git"] }
 ```
 
 ## Development
