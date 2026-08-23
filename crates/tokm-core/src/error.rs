@@ -7,6 +7,10 @@ use thiserror::Error;
 /// A tokenizer could not be resolved or execute a count.
 #[derive(Debug, Error)]
 pub enum TokenizerError {
+    /// The requested model alias is unavailable.
+    #[error("unsupported model: {0}")]
+    UnsupportedModel(String),
+
     /// The requested built-in encoding is unavailable.
     #[error("unsupported encoding: {0}")]
     UnsupportedEncoding(String),

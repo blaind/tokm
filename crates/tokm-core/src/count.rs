@@ -37,6 +37,12 @@ impl CountOptions {
         Self::new(Arc::new(BuiltinTokenCounter::new(encoding)))
     }
 
+    /// Construct options by resolving a supported model alias.
+    #[cfg(feature = "builtin-tokenizers")]
+    pub fn for_model(model: &str) -> Result<Self, crate::TokenizerError> {
+        BuiltinEncoding::for_model(model).map(Self::for_encoding)
+    }
+
     /// Construct options from a local Hugging Face `tokenizer.json` artifact.
     #[cfg(feature = "hf")]
     pub fn for_tokenizer_file(
@@ -131,5 +137,16 @@ mod tests {
 
         assert_eq!(literal_result.bytes, normalized_result.bytes);
         assert_eq!(normalized_result.tokens, expected_result.tokens);
+    }
+
+    #[test]
+    fn model_alias_uses_resolved_encoding_metadata() {
+        let model = CountOptions::for_model("gpt-5").unwrap();
+        let encoding = CountOptions::for_encoding(BuiltinEncoding::O200kBase);
+        let model_result = count_text("hello world", &model).unwrap();
+        let encoding_result = count_text("hello world", &encoding).unwrap();
+
+        assert_eq!(model_result, encoding_result);
+        assert_eq!(model_result.tokenizer.name, "o200k_base");
     }
 }

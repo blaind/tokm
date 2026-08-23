@@ -21,6 +21,29 @@ pub enum BuiltinEncoding {
 }
 
 impl BuiltinEncoding {
+    /// Resolve a supported model alias to its underlying encoding family.
+    ///
+    /// Model names are conveniences only. Stable tokenizer identity remains
+    /// the resolved encoding fingerprint returned in result metadata.
+    pub fn for_model(model: &str) -> Result<Self, TokenizerError> {
+        if matches!(model, "gpt-5" | "gpt-4.1" | "gpt-4o")
+            || model.starts_with("gpt-5")
+            || model.starts_with("gpt-4.1-")
+            || model.starts_with("gpt-4o-")
+        {
+            return Ok(Self::O200kBase);
+        }
+
+        if matches!(model, "gpt-4" | "gpt-3.5-turbo")
+            || model.starts_with("gpt-4-")
+            || model.starts_with("gpt-3.5-turbo-")
+        {
+            return Ok(Self::Cl100kBase);
+        }
+
+        Err(TokenizerError::UnsupportedModel(model.to_owned()))
+    }
+
     /// Return the accepted command-line name.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -158,5 +181,31 @@ mod tests {
                 encoding
             );
         }
+    }
+
+    #[test]
+    fn model_aliases_resolve_to_stable_encoding_identities() {
+        let fixtures = [
+            ("gpt-5", BuiltinEncoding::O200kBase),
+            ("gpt-5.2-2025-12-11", BuiltinEncoding::O200kBase),
+            ("gpt-4.1", BuiltinEncoding::O200kBase),
+            ("gpt-4.1-2025-04-14", BuiltinEncoding::O200kBase),
+            ("gpt-4o", BuiltinEncoding::O200kBase),
+            ("gpt-4o-2024-08-06", BuiltinEncoding::O200kBase),
+            ("gpt-4", BuiltinEncoding::Cl100kBase),
+            ("gpt-4-0613", BuiltinEncoding::Cl100kBase),
+            ("gpt-3.5-turbo", BuiltinEncoding::Cl100kBase),
+            ("gpt-3.5-turbo-0125", BuiltinEncoding::Cl100kBase),
+        ];
+
+        for (model, encoding) in fixtures {
+            assert_eq!(
+                BuiltinEncoding::for_model(model).unwrap(),
+                encoding,
+                "{model}"
+            );
+        }
+
+        assert!(BuiltinEncoding::for_model("unknown").is_err());
     }
 }
