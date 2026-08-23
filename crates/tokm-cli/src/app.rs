@@ -17,6 +17,11 @@ pub(crate) fn execute(args: &Args) -> Result<Execution, CliError> {
             "--dirs is not supported for Git diffs".to_owned(),
         ));
     }
+    if args.density && args.command.is_some() {
+        return Err(CliError::Usage(
+            "--density is not supported for Git diffs".to_owned(),
+        ));
+    }
     if args.dirs && args.sort == crate::args::SortField::Language {
         return Err(CliError::Usage(
             "--sort language is not available with --dirs".to_owned(),

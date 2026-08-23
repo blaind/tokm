@@ -53,17 +53,31 @@ pub(crate) struct Args {
     pub(crate) invalid_utf8: InvalidUtf8Arg,
 
     /// Show per-file results instead of language totals.
-    #[arg(long, global = true, conflicts_with = "dirs", help_heading = "Display")]
+    #[arg(
+        long,
+        global = true,
+        conflicts_with_all = ["dirs", "density"],
+        help_heading = "Display"
+    )]
     pub(crate) files: bool,
 
     /// Show recursive directory totals instead of language totals.
     #[arg(
         long,
         global = true,
-        conflicts_with = "files",
+        conflicts_with_all = ["files", "density"],
         help_heading = "Display"
     )]
     pub(crate) dirs: bool,
+
+    /// Show token-density metrics by language.
+    #[arg(
+        long,
+        global = true,
+        conflicts_with_all = ["files", "dirs"],
+        help_heading = "Display"
+    )]
+    pub(crate) density: bool,
 
     /// Select the output format.
     #[arg(
@@ -412,8 +426,10 @@ mod tests {
     }
 
     #[test]
-    fn file_and_directory_views_are_mutually_exclusive() {
+    fn alternate_views_are_mutually_exclusive() {
         assert!(Args::try_parse_from(["tokm", "--files", "--dirs"]).is_err());
+        assert!(Args::try_parse_from(["tokm", "--files", "--density"]).is_err());
+        assert!(Args::try_parse_from(["tokm", "--dirs", "--density"]).is_err());
     }
 
     #[test]
