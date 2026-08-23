@@ -16,8 +16,8 @@ $ tokm .
  Total                 9  14,333   100.0%
 ```
 
-The first release series provides the Rust core library, native CLI, and typed Python bindings.
-Local Hugging Face `tokenizer.json` support and Git tree diffs follow in later phases.
+The first release series provides the Rust core library, native CLI, typed Python bindings, and
+local Hugging Face `tokenizer.json` support. Git tree diffs follow in a later phase.
 
 ## Usage
 
@@ -38,6 +38,17 @@ tokm . --encoding cl100k_base
 tokm . --normalize
 tokm . --invalid-utf8 lossy
 ```
+
+Load a Hugging Face tokenizer entirely from a local artifact:
+
+```console
+tokm . --tokenizer-file ./tokenizer.json
+```
+
+`--encoding` and `--tokenizer-file` are mutually exclusive. Artifact identity is a BLAKE3 hash of
+the actual file contents, not its path or timestamp. Raw-text measurement follows the artifact's
+normalization, pre-tokenization, model, and added-token matching. It disables automatic framing,
+truncation, and padding so the complete supplied text is measured without BOS/EOS insertion.
 
 Decoded text is literal by default. `--normalize` removes one leading UTF-8 BOM, converts CRLF to
 LF, and converts standalone CR to LF. Invalid UTF-8 is skipped by default; lossy mode applies Rust
