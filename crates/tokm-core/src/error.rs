@@ -56,6 +56,58 @@ pub enum DiffError {
     IncompatibleSemantics(&'static str),
 }
 
+/// A Git repository or committed tree could not be measured.
+#[derive(Debug, Error)]
+pub enum GitError {
+    /// No repository could be discovered from the supplied path.
+    #[error("cannot open Git repository from {path}: {message}")]
+    Repository {
+        /// Path supplied by the caller.
+        path: PathBuf,
+
+        /// Repository discovery error.
+        message: String,
+    },
+
+    /// A revision expression could not be resolved to an object.
+    #[error("cannot resolve Git revision {revision:?}: {message}")]
+    Revision {
+        /// User-supplied revision expression.
+        revision: String,
+
+        /// Revision parser error.
+        message: String,
+    },
+
+    /// A revision object could not be peeled to a tree.
+    #[error("cannot read Git tree for {revision:?}: {message}")]
+    Tree {
+        /// User-supplied revision expression.
+        revision: String,
+
+        /// Object or tree traversal error.
+        message: String,
+    },
+
+    /// An object referenced by a committed tree could not be read.
+    #[error("cannot read Git object for {path}: {message}")]
+    Object {
+        /// Logical path of the tree entry.
+        path: PathBuf,
+
+        /// Object database error.
+        message: String,
+    },
+
+    /// Tokenization of a committed blob failed.
+    #[error(transparent)]
+    Count(#[from] CountError),
+
+    /// Aggregation of the committed tree failed.
+    #[error(transparent)]
+    Scan(#[from] ScanError),
+}
+
 /// A recursive scan could not produce a trustworthy aggregate result.
 #[derive(Debug, Error)]
 pub enum ScanError {

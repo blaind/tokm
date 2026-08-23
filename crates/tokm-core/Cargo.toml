@@ -15,12 +15,14 @@ default = ["builtin-tokenizers", "cache"]
 builtin-tokenizers = ["dep:tiktoken-rs"]
 cache = ["dep:blake3", "dep:directories", "dep:fs2", "dep:serde_json"]
 hf = ["dep:blake3", "dep:serde_json", "dep:tokenizers"]
+git = ["dep:gix"]
 
 [dependencies]
 blake3 = { workspace = true, optional = true }
 directories = { workspace = true, optional = true }
 fs2 = { workspace = true, optional = true }
 globset.workspace = true
+gix = { workspace = true, optional = true }
 ignore.workspace = true
 path-clean.workspace = true
 rayon.workspace = true
