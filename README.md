@@ -131,6 +131,16 @@ Token budgets use a dedicated exit code:
 tokm . --max-tokens 200000
 ```
 
+Compare the measured total with a context window without changing tokenizer identity:
+
+```console
+tokm . --context 128000
+```
+
+Human output reports utilization and either remaining tokens or the amount exceeded. JSON adds a
+separate `context` object containing the window, utilization percentage, remaining tokens, and
+exceeded tokens. For `tokm diff`, the comparison applies to the head snapshot.
+
 | Exit | Meaning |
 | ---: | --- |
 | 0 | Successful measurement |
