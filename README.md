@@ -104,7 +104,7 @@ file = tokm.count_file("README.md")
 result = tokm.scan(["src", "tests"], encoding="o200k_base")
 
 print(file.tokens)
-print(result.totals.tokens)
+print(result.total_tokens)
 print(result.languages["Rust"].tokens)
 ```
 
