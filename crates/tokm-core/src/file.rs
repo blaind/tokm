@@ -320,6 +320,50 @@ pub struct FileResult {
     pub invalid_utf8: InvalidUtf8Policy,
 }
 
+/// Measurement for one in-memory byte input such as stdin.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ByteCountResult {
+    /// Exact tokenizer count after decode and text-policy handling.
+    pub tokens: u64,
+
+    /// Original input size in bytes.
+    pub bytes: u64,
+
+    /// Whether invalid bytes were replaced before tokenization.
+    pub decoded_lossily: bool,
+
+    /// Stable identity of the tokenizer used for the count.
+    pub tokenizer: TokenizerMetadata,
+
+    /// Versioned text transformation applied before tokenization.
+    pub text_policy: TextPolicyMetadata,
+
+    /// Invalid UTF-8 policy active for this measurement.
+    pub invalid_utf8: InvalidUtf8Policy,
+}
+
+/// Structured skip for one in-memory byte input.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ByteSkip {
+    /// Stable skip category.
+    pub reason: SkipReason,
+
+    /// Optional specific encoding or other deterministic detail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// Result of attempting to measure one in-memory byte input.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ByteOutcome {
+    /// The byte input was measured successfully.
+    Measured(ByteCountResult),
+
+    /// The byte input was intentionally omitted with a visible reason.
+    Skipped(ByteSkip),
+}
+
 /// Result of attempting to measure one filesystem path.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -329,6 +373,63 @@ pub enum FileOutcome {
 
     /// The path was intentionally omitted with a visible reason.
     Skipped(SkipDetail),
+}
+
+/// Measure in-memory bytes under the same decode and count policy as files.
+pub fn count_bytes(bytes: &[u8], options: &ScanOptions) -> Result<ByteOutcome, CountError> {
+    let byte_count =
+        u64::try_from(bytes.len()).map_err(|_| crate::TokenizerError::CountOverflow)?;
+    if !options.max_file_size.admits(byte_count) {
+        return Ok(byte_skipped(SkipReason::Oversized, None));
+    }
+
+    let decoded = decode(bytes, options.invalid_utf8);
+    let (text, decoded_lossily) = match decoded {
+        DecodeOutcome::Text {
+            text,
+            decoded_lossily,
+        } => (text, decoded_lossily),
+        DecodeOutcome::Skipped { reason, detail } => {
+            return Ok(byte_skipped(reason, detail.map(str::to_owned)));
+        }
+    };
+    #[cfg(feature = "cache")]
+    let cache = Cache::resolve(options.cache_policy());
+    #[cfg(feature = "cache")]
+    let content_hash = Cache::content_hash(bytes);
+    #[cfg(feature = "cache")]
+    let tokens = cache
+        .as_ref()
+        .and_then(|cache| cache.lookup_count(&content_hash, &options.count, options.invalid_utf8))
+        .filter(|cached| cached.decoded_lossily == decoded_lossily)
+        .map_or_else(
+            || count_text(&text, &options.count).map(|result| result.tokens),
+            |cached| Ok(cached.tokens),
+        )?;
+    #[cfg(not(feature = "cache"))]
+    let tokens = count_text(&text, &options.count)?.tokens;
+
+    #[cfg(feature = "cache")]
+    if let Some(cache) = cache {
+        cache.store_count(
+            &content_hash,
+            &options.count,
+            options.invalid_utf8,
+            CachedCount {
+                tokens,
+                decoded_lossily,
+            },
+        );
+    }
+
+    Ok(ByteOutcome::Measured(ByteCountResult {
+        tokens,
+        bytes: byte_count,
+        decoded_lossily,
+        tokenizer: options.count.tokenizer().metadata().clone(),
+        text_policy: options.count.text_policy().metadata(),
+        invalid_utf8: options.invalid_utf8,
+    }))
 }
 
 /// Measure one filesystem path without aborting on per-file skips.
@@ -497,13 +598,20 @@ fn skipped(path: PathBuf, reason: SkipReason, detail: Option<String>) -> FileOut
     })
 }
 
+fn byte_skipped(reason: SkipReason, detail: Option<String>) -> ByteOutcome {
+    ByteOutcome::Skipped(ByteSkip { reason, detail })
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
 
     use tempfile::tempdir;
 
-    use super::{FileOutcome, InvalidUtf8Policy, MaxFileSize, ScanOptions, SkipReason, count_file};
+    use super::{
+        ByteOutcome, FileOutcome, InvalidUtf8Policy, MaxFileSize, ScanOptions, SkipReason,
+        count_bytes, count_file,
+    };
     use crate::Language;
 
     fn options() -> ScanOptions {
@@ -571,6 +679,25 @@ mod tests {
         assert!(matches!(
             lossy,
             FileOutcome::Measured(result) if result.decoded_lossily
+        ));
+    }
+
+    #[test]
+    fn byte_inputs_share_file_decode_policy() {
+        let skipped = count_bytes(&[b'a', 0xff], &options()).unwrap();
+        let lossy = count_bytes(
+            &[b'a', 0xff],
+            &options().with_invalid_utf8(InvalidUtf8Policy::Lossy),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            skipped,
+            ByteOutcome::Skipped(detail) if detail.reason == SkipReason::InvalidUtf8
+        ));
+        assert!(matches!(
+            lossy,
+            ByteOutcome::Measured(result) if result.decoded_lossily && result.bytes == 2
         ));
     }
 }
