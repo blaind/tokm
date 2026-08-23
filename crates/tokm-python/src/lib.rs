@@ -321,14 +321,18 @@ impl From<ScanResult> for PyScanResult {
     }
 }
 
-#[pyfunction(name = "count", signature = (text, *, encoding = "o200k_base", normalize = false))]
+#[pyfunction(
+    name = "count",
+    signature = (text, *, encoding = None, tokenizer_file = None, normalize = false)
+)]
 fn count_text(
     py: Python<'_>,
     text: String,
-    encoding: &str,
+    encoding: Option<&str>,
+    tokenizer_file: Option<PathBuf>,
     normalize: bool,
 ) -> PyResult<PyCountResult> {
-    let options = count_options(encoding, normalize)?;
+    let options = count_options(encoding, tokenizer_file.as_deref(), normalize)?;
     let result = py
         .detach(move || core_count_text(&text, &options))
         .map_err(map_count_error)?;
@@ -346,17 +350,20 @@ fn count_text(
     signature = (
         path,
         *,
-        encoding = "o200k_base",
+        encoding = None,
+        tokenizer_file = None,
         normalize = false,
         invalid_utf8 = "skip",
         max_file_size = Some(20_971_520),
         no_cache = false
     )
 )]
+#[allow(clippy::too_many_arguments)]
 fn count_file(
     py: Python<'_>,
     path: PathBuf,
-    encoding: &str,
+    encoding: Option<&str>,
+    tokenizer_file: Option<PathBuf>,
     normalize: bool,
     invalid_utf8: &str,
     max_file_size: Option<u64>,
@@ -364,6 +371,7 @@ fn count_file(
 ) -> PyResult<PyFileResult> {
     let options = scan_options(
         encoding,
+        tokenizer_file.as_deref(),
         normalize,
         invalid_utf8,
         max_file_size,
@@ -406,7 +414,8 @@ fn count_file(
     signature = (
         paths,
         *,
-        encoding = "o200k_base",
+        encoding = None,
+        tokenizer_file = None,
         normalize = false,
         invalid_utf8 = "skip",
         include = None,
@@ -423,7 +432,8 @@ fn count_file(
 fn scan(
     py: Python<'_>,
     paths: &Bound<'_, PyAny>,
-    encoding: &str,
+    encoding: Option<&str>,
+    tokenizer_file: Option<PathBuf>,
     normalize: bool,
     invalid_utf8: &str,
     include: Option<Vec<String>>,
@@ -438,6 +448,7 @@ fn scan(
     let paths = extract_paths(paths)?;
     let mut options = scan_options(
         encoding,
+        tokenizer_file.as_deref(),
         normalize,
         invalid_utf8,
         max_file_size,
@@ -459,21 +470,38 @@ fn scan(
         .map_err(map_scan_error)
 }
 
-fn count_options(encoding: &str, normalize: bool) -> PyResult<CountOptions> {
-    let encoding = encoding
-        .parse::<BuiltinEncoding>()
-        .map_err(map_tokenizer_error)?;
+fn count_options(
+    encoding: Option<&str>,
+    tokenizer_file: Option<&std::path::Path>,
+    normalize: bool,
+) -> PyResult<CountOptions> {
+    if encoding.is_some() && tokenizer_file.is_some() {
+        return Err(ConfigurationError::new_err(
+            "encoding and tokenizer_file are mutually exclusive",
+        ));
+    }
     let text_policy = if normalize {
         TextPolicy::Normalized
     } else {
         TextPolicy::Literal
     };
+    let options = match tokenizer_file {
+        Some(path) => CountOptions::for_tokenizer_file(path).map_err(map_tokenizer_error)?,
+        None => {
+            let encoding = encoding
+                .unwrap_or("o200k_base")
+                .parse::<BuiltinEncoding>()
+                .map_err(map_tokenizer_error)?;
+            CountOptions::for_encoding(encoding)
+        }
+    };
 
-    Ok(CountOptions::for_encoding(encoding).with_text_policy(text_policy))
+    Ok(options.with_text_policy(text_policy))
 }
 
 fn scan_options(
-    encoding: &str,
+    encoding: Option<&str>,
+    tokenizer_file: Option<&std::path::Path>,
     normalize: bool,
     invalid_utf8: &str,
     max_file_size: Option<u64>,
@@ -490,7 +518,7 @@ fn scan_options(
         }
     };
     let max_file_size = max_file_size.map_or(MaxFileSize::Unlimited, MaxFileSize::Limited);
-    let mut options = ScanOptions::new(count_options(encoding, normalize)?)
+    let mut options = ScanOptions::new(count_options(encoding, tokenizer_file, normalize)?)
         .with_invalid_utf8(invalid_utf8)
         .with_max_file_size(max_file_size)
         .with_cache_enabled(!no_cache);

@@ -64,7 +64,33 @@ def test_invalid_configuration_has_typed_errors(tmp_path: Path) -> None:
     with pytest.raises(tokm.ConfigurationError, match="threads"):
         tokm.scan(tmp_path, threads=0)
 
+    with pytest.raises(tokm.ConfigurationError, match="mutually exclusive"):
+        tokm.count(
+            "text",
+            encoding="o200k_base",
+            tokenizer_file=tmp_path / "tokenizer.json",
+        )
+
 
 def test_missing_scan_input_is_an_input_error(tmp_path: Path) -> None:
     with pytest.raises(tokm.InputError, match="cannot inspect input"):
         tokm.scan(tmp_path / "missing")
+
+
+def test_local_tokenizer_file_uses_shared_artifact_semantics() -> None:
+    tokenizer_file = (
+        Path(__file__).parents[2]
+        / "crates"
+        / "tokm-core"
+        / "fixtures"
+        / "hf_tokenizer"
+        / "tokenizer.json"
+    )
+
+    result = tokm.count("HÉLLO <|im_start|> WORLD", tokenizer_file=tokenizer_file)
+
+    assert result.tokens == 3
+    assert result.tokenizer.kind == "local_file"
+    assert result.tokenizer.accuracy == "exact"
+    assert result.tokenizer.raw_text_semantics == "artifact"
+    assert result.tokenizer.fingerprint.startswith("huggingface:blake3:")

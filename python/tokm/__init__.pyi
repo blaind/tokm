@@ -153,13 +153,15 @@ class ScanResult:
 def count(
     text: str,
     *,
-    encoding: str = "o200k_base",
+    encoding: str | None = None,
+    tokenizer_file: str | PathLike[str] | None = None,
     normalize: bool = False,
 ) -> CountResult: ...
 def count_file(
     path: str | PathLike[str],
     *,
-    encoding: str = "o200k_base",
+    encoding: str | None = None,
+    tokenizer_file: str | PathLike[str] | None = None,
     normalize: bool = False,
     invalid_utf8: str = "skip",
     max_file_size: int | None = 20_971_520,
@@ -168,7 +170,8 @@ def count_file(
 def scan(
     paths: str | PathLike[str] | Sequence[str | PathLike[str]],
     *,
-    encoding: str = "o200k_base",
+    encoding: str | None = None,
+    tokenizer_file: str | PathLike[str] | None = None,
     normalize: bool = False,
     invalid_utf8: str = "skip",
     include: Sequence[str] | None = None,
