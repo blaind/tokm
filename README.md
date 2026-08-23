@@ -247,6 +247,31 @@ Enable committed-tree scanning and snapshot comparison explicitly:
 tokm-core = { version = "0.1", features = ["git"] }
 ```
 
+## Benchmarks
+
+Criterion harnesses cover tokenizer throughput, content hashing, 100k-result aggregation,
+synthetic filesystem workloads, cold and warm caches, a single-file modification, and a Git diff
+with a small change set.
+
+```console
+cargo bench --locked -p tokm-core --bench micro
+cargo bench --locked -p tokm-core --bench scan_workloads
+cargo bench --locked -p tokm-core --bench git_diff_workload --features git
+```
+
+Use release builds over representative real projects for end-to-end wall-time and peak-memory
+measurements. On platforms with GNU `time`, for example:
+
+```console
+cargo build --locked --release -p tokm
+/usr/bin/time -v target/release/tokm --no-cache PATH
+/usr/bin/time -v target/release/tokm PATH
+```
+
+Cold and warm comparisons should use identical tokenizer, filtering, ignore, and file-size
+policies. Competitor comparisons must likewise use equivalent behavior. Benchmark results, rather
+than the native architecture alone, are required before making relative performance claims.
+
 ## Development
 
 The workspace pins its Rust toolchain. Run the same host gates as CI:
