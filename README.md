@@ -87,6 +87,18 @@ Each directory includes every measured file beneath it. Overlapping input roots 
 logical file once. `--dirs` is a filesystem view and cannot be combined with stdin, Git diff,
 `--files`, or `--sort language`.
 
+Compare token density across languages:
+
+```console
+tokm . --density
+tokm . --density --format json
+```
+
+The density view reports tokens per KiB (shown as `Tokens/KB`) and bytes per token, rounded to one
+decimal place from exact token and byte totals. JSON adds the same metrics beneath each language's
+`density` object. It does not retokenize content or change cache identity. `--density` cannot be
+combined with `--files`, `--dirs`, or Git diff.
+
 Files larger than 20 MiB are skipped visibly. The limit accepts binary K/M/G suffixes.
 
 ```console
