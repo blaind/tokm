@@ -11,7 +11,9 @@ use crate::args::{Args, InputMode};
 
 pub(crate) fn execute(args: &Args) -> Result<ScanResult, CliError> {
     let input = args.input_mode().map_err(CliError::Usage)?;
-    let options = args.scan_options();
+    let options = args
+        .scan_options()
+        .map_err(|error| CliError::Operational(error.to_string()))?;
 
     match input {
         InputMode::Filesystem(paths) => {

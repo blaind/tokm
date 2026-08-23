@@ -103,6 +103,50 @@ fn cli_and_core_match_both_exact_encodings() {
 }
 
 #[test]
+fn local_tokenizer_file_uses_artifact_semantics_and_metadata() {
+    let tokenizer = fixture("hf_tokenizer").join("tokenizer.json");
+    let output = run_stdin(
+        &[
+            "--format",
+            "json",
+            "--tokenizer-file",
+            tokenizer.to_str().unwrap(),
+            "-",
+        ],
+        b"hello world",
+    );
+    let json = parse_json(&output);
+
+    assert_eq!(json["totals"]["tokens"], 2);
+    assert_eq!(json["tokenizer"]["kind"], "local_file");
+    assert_eq!(json["tokenizer"]["name"], "tokenizer.json");
+    assert_eq!(json["tokenizer"]["accuracy"], "exact");
+    assert_eq!(json["tokenizer"]["raw_text_semantics"], "artifact");
+    assert!(
+        json["tokenizer"]["fingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with("huggingface:blake3:")
+    );
+}
+
+#[test]
+fn tokenizer_selector_conflict_is_a_usage_error() {
+    let output = tokm()
+        .args([
+            "--encoding",
+            "o200k_base",
+            "--tokenizer-file",
+            "tokenizer.json",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
 fn stdin_uses_literal_and_normalized_core_semantics() {
     let bytes = fixture_bytes("bom");
     let text = std::str::from_utf8(&bytes).unwrap();
