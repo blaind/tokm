@@ -1,0 +1,14 @@
+[package]
+name = "tokm"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.56"
+description = "Placeholder for the Tokm project."
+readme = "README.md"
+license = "MIT"
+keywords = ["tokm", "placeholder"]
+categories = ["development-tools"]
+homepage = "https://crates.io/crates/tokm"
+include = ["src/**/*", "README.md", "LICENSE"]
+
+[dependencies]
