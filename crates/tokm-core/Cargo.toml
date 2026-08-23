@@ -11,6 +11,10 @@ default = ["builtin-tokenizers"]
 builtin-tokenizers = ["dep:tiktoken-rs"]
 
 [dependencies]
+globset.workspace = true
+ignore.workspace = true
+path-clean.workspace = true
+rayon.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tiktoken-rs = { workspace = true, optional = true }

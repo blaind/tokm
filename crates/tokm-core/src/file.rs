@@ -3,6 +3,7 @@
 use std::{
     fs::{self, File},
     io::{self, Read},
+    num::NonZeroUsize,
     path::{Path, PathBuf},
 };
 
@@ -16,6 +17,9 @@ use crate::{
 
 /// Default maximum size of one measured file: 20 MiB.
 pub const DEFAULT_MAX_FILE_SIZE: u64 = 20 * 1024 * 1024;
+
+/// Maximum number of file bodies measured concurrently by default.
+pub const DEFAULT_MAX_WORKERS: usize = 8;
 
 /// Policy used when bytes are not valid UTF-8.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -71,6 +75,12 @@ pub struct ScanOptions {
     count: CountOptions,
     invalid_utf8: InvalidUtf8Policy,
     max_file_size: MaxFileSize,
+    include: Vec<String>,
+    exclude: Vec<String>,
+    hidden: bool,
+    no_ignore: bool,
+    follow_symlinks: bool,
+    workers: NonZeroUsize,
 }
 
 impl ScanOptions {
@@ -81,6 +91,12 @@ impl ScanOptions {
             count,
             invalid_utf8: InvalidUtf8Policy::Skip,
             max_file_size: MaxFileSize::default(),
+            include: Vec::new(),
+            exclude: Vec::new(),
+            hidden: false,
+            no_ignore: false,
+            follow_symlinks: false,
+            workers: default_workers(),
         }
     }
 
@@ -95,6 +111,48 @@ impl ScanOptions {
     #[must_use]
     pub fn with_max_file_size(mut self, limit: MaxFileSize) -> Self {
         self.max_file_size = limit;
+        self
+    }
+
+    /// Add an inclusive path glob. At least one include must match when set.
+    #[must_use]
+    pub fn with_include(mut self, pattern: impl Into<String>) -> Self {
+        self.include.push(pattern.into());
+        self
+    }
+
+    /// Add an exclusive path glob.
+    #[must_use]
+    pub fn with_exclude(mut self, pattern: impl Into<String>) -> Self {
+        self.exclude.push(pattern.into());
+        self
+    }
+
+    /// Include hidden paths during discovery.
+    #[must_use]
+    pub fn with_hidden(mut self, hidden: bool) -> Self {
+        self.hidden = hidden;
+        self
+    }
+
+    /// Disable `.gitignore`, `.ignore`, and Git exclude processing.
+    #[must_use]
+    pub fn with_no_ignore(mut self, no_ignore: bool) -> Self {
+        self.no_ignore = no_ignore;
+        self
+    }
+
+    /// Follow symbolic links during discovery and file measurement.
+    #[must_use]
+    pub fn with_follow_symlinks(mut self, follow: bool) -> Self {
+        self.follow_symlinks = follow;
+        self
+    }
+
+    /// Bound the number of files measured concurrently.
+    #[must_use]
+    pub fn with_workers(mut self, workers: NonZeroUsize) -> Self {
+        self.workers = workers;
         self
     }
 
@@ -114,6 +172,30 @@ impl ScanOptions {
     #[must_use]
     pub const fn max_file_size(&self) -> MaxFileSize {
         self.max_file_size
+    }
+
+    pub(crate) fn includes(&self) -> &[String] {
+        &self.include
+    }
+
+    pub(crate) fn excludes(&self) -> &[String] {
+        &self.exclude
+    }
+
+    pub(crate) const fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    pub(crate) const fn no_ignore(&self) -> bool {
+        self.no_ignore
+    }
+
+    pub(crate) const fn follow_symlinks(&self) -> bool {
+        self.follow_symlinks
+    }
+
+    pub(crate) const fn workers(&self) -> NonZeroUsize {
+        self.workers
     }
 }
 
@@ -219,14 +301,23 @@ pub fn count_file(
     options: &ScanOptions,
 ) -> Result<FileOutcome, CountError> {
     let path = path.into();
-    let metadata = match fs::symlink_metadata(&path) {
+    let link_metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(_) => return Ok(skipped(path, SkipReason::Unreadable, None)),
     };
 
-    if metadata.file_type().is_symlink() {
-        return Ok(skipped(path, SkipReason::Symlink, None));
-    }
+    let metadata = if link_metadata.file_type().is_symlink() {
+        if !options.follow_symlinks {
+            return Ok(skipped(path, SkipReason::Symlink, None));
+        }
+
+        match fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => return Ok(skipped(path, SkipReason::Unreadable, None)),
+        }
+    } else {
+        link_metadata
+    };
     if !metadata.is_file() {
         return Ok(skipped(path, SkipReason::UnsupportedFilesystemType, None));
     }
@@ -261,6 +352,11 @@ pub fn count_file(
         text_policy: count.text_policy,
         invalid_utf8: options.invalid_utf8,
     }))
+}
+
+fn default_workers() -> NonZeroUsize {
+    let available = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+    NonZeroUsize::new(available.min(DEFAULT_MAX_WORKERS)).expect("worker count is nonzero")
 }
 
 fn read_bounded(path: &Path, max_file_size: MaxFileSize) -> io::Result<Option<Vec<u8>>> {

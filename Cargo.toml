@@ -5,10 +5,14 @@ resolver = "3"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT"
 
 [workspace.dependencies]
+globset = "0.4.20"
+ignore = "0.4.33"
+path-clean = "1"
+rayon = "1.12"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tiktoken-rs = "=0.12.0"
