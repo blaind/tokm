@@ -89,6 +89,10 @@ pub(crate) struct Args {
     #[arg(long, global = true, value_name = "TOKENS", help_heading = "Display")]
     pub(crate) context: Option<NonZeroU64>,
 
+    /// Estimate input cost from a USD price per million tokens.
+    #[arg(long, global = true, value_name = "USD_PER_1M", value_parser = parse_price, help_heading = "Display")]
+    pub(crate) price_input: Option<InputPrice>,
+
     /// Include paths matching this glob; may be repeated.
     #[arg(long, global = true, value_name = "GLOB", help_heading = "Filtering")]
     pub(crate) include: Vec<String>,
@@ -254,6 +258,22 @@ pub(crate) enum SortField {
     Language,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct InputPrice {
+    micros_per_million: u64,
+}
+
+impl InputPrice {
+    #[cfg(test)]
+    pub(crate) const fn from_micros(micros_per_million: u64) -> Self {
+        Self { micros_per_million }
+    }
+
+    pub(crate) const fn micros_per_million(self) -> u64 {
+        self.micros_per_million
+    }
+}
+
 fn parse_encoding(value: &str) -> Result<BuiltinEncoding, String> {
     value
         .parse::<BuiltinEncoding>()
@@ -264,6 +284,37 @@ fn parse_model(value: &str) -> Result<String, String> {
     BuiltinEncoding::for_model(value)
         .map(|_| value.to_owned())
         .map_err(|error| error.to_string())
+}
+
+fn parse_price(value: &str) -> Result<InputPrice, String> {
+    let (whole, fractional) = value.split_once('.').unwrap_or((value, ""));
+    if whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fractional.bytes().all(|byte| byte.is_ascii_digit())
+        || value.matches('.').count() > 1
+    {
+        return Err("input price must be a non-negative decimal number".to_owned());
+    }
+    if fractional.len() > 6 {
+        return Err("input price supports at most six decimal places".to_owned());
+    }
+    let whole = whole
+        .parse::<u64>()
+        .map_err(|_| "input price does not fit in u64".to_owned())?;
+    let fractional = if fractional.is_empty() {
+        0
+    } else {
+        fractional
+            .parse::<u64>()
+            .map_err(|_| "input price does not fit in u64".to_owned())?
+            * 10_u64.pow(u32::try_from(6 - fractional.len()).unwrap())
+    };
+    let micros_per_million = whole
+        .checked_mul(1_000_000)
+        .and_then(|whole| whole.checked_add(fractional))
+        .ok_or_else(|| "input price does not fit in u64".to_owned())?;
+
+    Ok(InputPrice { micros_per_million })
 }
 
 fn parse_file_size(value: &str) -> Result<MaxFileSize, String> {
@@ -346,6 +397,18 @@ mod tests {
     fn context_window_must_be_positive() {
         assert!(Args::try_parse_from(["tokm", "--context", "128000"]).is_ok());
         assert!(Args::try_parse_from(["tokm", "--context", "0"]).is_err());
+    }
+
+    #[test]
+    fn input_price_uses_bounded_fixed_point_decimal_parsing() {
+        let price = Args::try_parse_from(["tokm", "--price-input", "1.250001"])
+            .unwrap()
+            .price_input
+            .unwrap();
+
+        assert_eq!(price.micros_per_million(), 1_250_001);
+        assert!(Args::try_parse_from(["tokm", "--price-input", "-1"]).is_err());
+        assert!(Args::try_parse_from(["tokm", "--price-input", "1.0000001"]).is_err());
     }
 
     #[test]

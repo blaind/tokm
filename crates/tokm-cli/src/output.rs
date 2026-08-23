@@ -11,7 +11,7 @@ use tokm_core::{
 
 use crate::{
     app::{DiffExecution, Execution},
-    args::{Args, OutputFormat, SortField},
+    args::{Args, InputPrice, OutputFormat, SortField},
 };
 
 const JSON_SCHEMA_VERSION: u32 = 1;
@@ -36,15 +36,15 @@ fn write_scan_report(writer: &mut impl Write, result: &ScanResult, args: &Args) 
                 .map_err(io::Error::other)?;
             write_directory_table(writer, &directories, &result.totals, args.sort)?;
             write_skip_summary(writer, &result.skipped)?;
-            write_context_summary(writer, result.totals.tokens, args.context)
+            write_measurement_summaries(writer, result.totals.tokens, args)
         }
         OutputFormat::Table if args.files => {
             write_file_table(writer, result, args.sort)?;
-            write_context_summary(writer, result.totals.tokens, args.context)
+            write_measurement_summaries(writer, result.totals.tokens, args)
         }
         OutputFormat::Table => {
             write_language_table(writer, result)?;
-            write_context_summary(writer, result.totals.tokens, args.context)
+            write_measurement_summaries(writer, result.totals.tokens, args)
         }
     }
 }
@@ -101,7 +101,7 @@ pub(crate) fn write_budget_failure(
 
 fn write_diff_report(writer: &mut impl Write, diff: &DiffExecution, args: &Args) -> io::Result<()> {
     match args.format {
-        OutputFormat::Json => write_diff_json(writer, diff, args.context),
+        OutputFormat::Json => write_diff_json(writer, diff, args),
         OutputFormat::Table if args.quiet => Ok(()),
         OutputFormat::Table => write_diff_table(writer, diff, args),
     }
@@ -134,7 +134,16 @@ fn write_diff_table(writer: &mut impl Write, diff: &DiffExecution, args: &Args) 
     }
     write_diff_skip_summary(writer, "Base", &result.base_skipped)?;
     write_diff_skip_summary(writer, "Head", &result.head_skipped)?;
-    write_context_summary(writer, result.head.tokens, args.context)
+    write_measurement_summaries(writer, result.head.tokens, args)
+}
+
+fn write_measurement_summaries(
+    writer: &mut impl Write,
+    tokens: u64,
+    args: &Args,
+) -> io::Result<()> {
+    write_context_summary(writer, tokens, args.context)?;
+    write_cost_summary(writer, tokens, args.price_input, args.context.is_none())
 }
 
 fn write_context_summary(
@@ -173,6 +182,33 @@ fn write_context_summary(
             format_number(comparison.exceeded_by_tokens)
         )
     }
+}
+
+fn write_cost_summary(
+    writer: &mut impl Write,
+    tokens: u64,
+    price: Option<InputPrice>,
+    include_tokens: bool,
+) -> io::Result<()> {
+    let Some(price) = price else {
+        return Ok(());
+    };
+    let estimate = CostEstimate::new(tokens, price);
+
+    if include_tokens {
+        writeln!(writer)?;
+        writeln!(writer, "Tokens:          {}", format_number(tokens))?;
+    }
+    writeln!(
+        writer,
+        "Price:           ${} / 1M tokens",
+        format_input_price(price, true)
+    )?;
+    writeln!(
+        writer,
+        "Estimated cost:  ${}",
+        format_estimated_cost(estimate.ten_thousandths, true)
+    )
 }
 
 fn write_diff_language_table(writer: &mut impl Write, result: &DiffResult) -> io::Result<()> {
@@ -535,6 +571,9 @@ fn write_json(writer: &mut impl Write, result: &ScanResult, args: &Args) -> io::
         context: args
             .context
             .map(|context| ContextComparison::new(result.totals.tokens, context)),
+        cost: args
+            .price_input
+            .map(|price| JsonCostEstimate::new(result.totals.tokens, price)),
         directories,
         languages: &result.languages,
         files,
@@ -545,11 +584,7 @@ fn write_json(writer: &mut impl Write, result: &ScanResult, args: &Args) -> io::
     writeln!(writer)
 }
 
-fn write_diff_json(
-    writer: &mut impl Write,
-    diff: &DiffExecution,
-    context: Option<NonZeroU64>,
-) -> io::Result<()> {
+fn write_diff_json(writer: &mut impl Write, diff: &DiffExecution, args: &Args) -> io::Result<()> {
     let result = &diff.result;
     let report = JsonDiffReport {
         schema_version: JSON_SCHEMA_VERSION,
@@ -573,7 +608,12 @@ fn write_diff_json(
             },
         },
         tokens: &result.tokens,
-        context: context.map(|context| ContextComparison::new(result.head.tokens, context)),
+        context: args
+            .context
+            .map(|context| ContextComparison::new(result.head.tokens, context)),
+        cost: args
+            .price_input
+            .map(|price| JsonCostEstimate::new(result.head.tokens, price)),
         languages: &result.languages,
         files: result
             .files
@@ -653,6 +693,35 @@ fn format_unsigned(value: u128) -> String {
     formatted
 }
 
+fn format_input_price(price: InputPrice, grouped: bool) -> String {
+    let micros = price.micros_per_million();
+    let whole = micros / 1_000_000;
+    let fraction = micros % 1_000_000;
+    let whole = if grouped {
+        format_number(whole)
+    } else {
+        whole.to_string()
+    };
+    if fraction == 0 {
+        return whole;
+    }
+
+    format!("{whole}.{:06}", fraction)
+        .trim_end_matches('0')
+        .to_owned()
+}
+
+fn format_estimated_cost(ten_thousandths: u128, grouped: bool) -> String {
+    let whole = ten_thousandths / 10_000;
+    let whole = if grouped {
+        format_unsigned(whole)
+    } else {
+        whole.to_string()
+    };
+
+    format!("{whole}.{:04}", ten_thousandths % 10_000)
+}
+
 #[cfg(windows)]
 fn machine_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
@@ -672,6 +741,8 @@ struct JsonReport<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     context: Option<ContextComparison>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    cost: Option<JsonCostEstimate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     directories: Option<Vec<JsonDirectory>>,
     languages: &'a [tokm_core::LanguageResult],
     files: Vec<JsonFile>,
@@ -688,6 +759,8 @@ struct JsonDiffReport<'a> {
     tokens: &'a TokenDelta,
     #[serde(skip_serializing_if = "Option::is_none")]
     context: Option<ContextComparison>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cost: Option<JsonCostEstimate>,
     languages: &'a [tokm_core::LanguageDelta],
     files: Vec<JsonDiffFile>,
 }
@@ -714,6 +787,42 @@ impl ContextComparison {
             remaining_tokens: window_tokens.saturating_sub(tokens),
             exceeded_by_tokens: tokens.saturating_sub(window_tokens),
             utilization_percent_tenths,
+        }
+    }
+}
+
+struct CostEstimate {
+    ten_thousandths: u128,
+}
+
+impl CostEstimate {
+    fn new(tokens: u64, price: InputPrice) -> Self {
+        const DIVISOR: u128 = 100_000_000;
+        let numerator = u128::from(tokens) * u128::from(price.micros_per_million());
+        let whole = numerator / DIVISOR;
+        let remainder = numerator % DIVISOR;
+
+        Self {
+            ten_thousandths: whole + u128::from(remainder >= DIVISOR / 2),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct JsonCostEstimate {
+    currency: &'static str,
+    price_per_million_tokens: String,
+    estimated_input_cost: String,
+}
+
+impl JsonCostEstimate {
+    fn new(tokens: u64, price: InputPrice) -> Self {
+        let estimate = CostEstimate::new(tokens, price);
+
+        Self {
+            currency: "USD",
+            price_per_million_tokens: format_input_price(price, false),
+            estimated_input_cost: format_estimated_cost(estimate.ten_thousandths, false),
         }
     }
 }
@@ -800,7 +909,11 @@ impl From<&SkipDetail> for JsonSkipDetail {
 mod tests {
     use std::num::NonZeroU64;
 
-    use super::{ContextComparison, allocated_percent_tenths, format_number, format_signed};
+    use super::{
+        ContextComparison, CostEstimate, allocated_percent_tenths, format_estimated_cost,
+        format_input_price, format_number, format_signed,
+    };
+    use crate::args::InputPrice;
 
     #[test]
     fn largest_remainder_percentages_sum_to_exactly_one_hundred() {
@@ -829,5 +942,18 @@ mod tests {
         assert_eq!(exceeded.utilization_percent_tenths, 1500);
         assert_eq!(exceeded.remaining_tokens, 0);
         assert_eq!(exceeded.exceeded_by_tokens, 50);
+    }
+
+    #[test]
+    fn cost_estimation_uses_rounded_fixed_point_math() {
+        let price = InputPrice::from_micros(1_250_000);
+        let estimate = CostEstimate::new(135_641, price);
+
+        assert_eq!(estimate.ten_thousandths, 1_696);
+        assert_eq!(format_input_price(price, false), "1.25");
+        assert_eq!(
+            format_estimated_cost(estimate.ten_thousandths, false),
+            "0.1696"
+        );
     }
 }
