@@ -1,6 +1,6 @@
 //! Deterministic human and JSON reporting.
 
-use std::{cmp::Ordering, io, io::Write, path::Path};
+use std::{cmp::Ordering, io, io::Write, num::NonZeroU64, path::Path};
 
 use serde::Serialize;
 use tokm_core::{
@@ -28,10 +28,16 @@ pub(crate) fn write_report(
 
 fn write_scan_report(writer: &mut impl Write, result: &ScanResult, args: &Args) -> io::Result<()> {
     match args.format {
-        OutputFormat::Json => write_json(writer, result),
+        OutputFormat::Json => write_json(writer, result, args.context),
         OutputFormat::Table if args.quiet => Ok(()),
-        OutputFormat::Table if args.files => write_file_table(writer, result, args.sort),
-        OutputFormat::Table => write_language_table(writer, result),
+        OutputFormat::Table if args.files => {
+            write_file_table(writer, result, args.sort)?;
+            write_context_summary(writer, result.totals.tokens, args.context)
+        }
+        OutputFormat::Table => {
+            write_language_table(writer, result)?;
+            write_context_summary(writer, result.totals.tokens, args.context)
+        }
     }
 }
 
@@ -87,7 +93,7 @@ pub(crate) fn write_budget_failure(
 
 fn write_diff_report(writer: &mut impl Write, diff: &DiffExecution, args: &Args) -> io::Result<()> {
     match args.format {
-        OutputFormat::Json => write_diff_json(writer, diff),
+        OutputFormat::Json => write_diff_json(writer, diff, args.context),
         OutputFormat::Table if args.quiet => Ok(()),
         OutputFormat::Table => write_diff_table(writer, diff, args),
     }
@@ -119,7 +125,46 @@ fn write_diff_table(writer: &mut impl Write, diff: &DiffExecution, args: &Args) 
         write_diff_language_table(writer, result)?;
     }
     write_diff_skip_summary(writer, "Base", &result.base_skipped)?;
-    write_diff_skip_summary(writer, "Head", &result.head_skipped)
+    write_diff_skip_summary(writer, "Head", &result.head_skipped)?;
+    write_context_summary(writer, result.head.tokens, args.context)
+}
+
+fn write_context_summary(
+    writer: &mut impl Write,
+    tokens: u64,
+    context: Option<NonZeroU64>,
+) -> io::Result<()> {
+    let Some(context) = context else {
+        return Ok(());
+    };
+    let comparison = ContextComparison::new(tokens, context);
+
+    writeln!(writer)?;
+    writeln!(writer, "Tokens:          {}", format_number(tokens))?;
+    writeln!(
+        writer,
+        "Context window:  {}",
+        format_number(comparison.window_tokens)
+    )?;
+    writeln!(
+        writer,
+        "Utilization:     {}.{}%",
+        format_unsigned(comparison.utilization_percent_tenths / 10),
+        comparison.utilization_percent_tenths % 10,
+    )?;
+    if comparison.exceeded_by_tokens == 0 {
+        writeln!(
+            writer,
+            "Remaining:       {}",
+            format_number(comparison.remaining_tokens)
+        )
+    } else {
+        writeln!(
+            writer,
+            "Exceeded by:     {}",
+            format_number(comparison.exceeded_by_tokens)
+        )
+    }
 }
 
 fn write_diff_language_table(writer: &mut impl Write, result: &DiffResult) -> io::Result<()> {
@@ -373,7 +418,11 @@ fn skip_counts(skipped: &SkippedSummary) -> [(&'static str, u64); 7] {
     ]
 }
 
-fn write_json(writer: &mut impl Write, result: &ScanResult) -> io::Result<()> {
+fn write_json(
+    writer: &mut impl Write,
+    result: &ScanResult,
+    context: Option<NonZeroU64>,
+) -> io::Result<()> {
     let files = result
         .files
         .iter()
@@ -394,6 +443,7 @@ fn write_json(writer: &mut impl Write, result: &ScanResult) -> io::Result<()> {
             invalid_utf8: result.invalid_utf8,
         },
         totals: &result.totals,
+        context: context.map(|context| ContextComparison::new(result.totals.tokens, context)),
         languages: &result.languages,
         files,
         skipped: json_skipped(&result.skipped),
@@ -403,7 +453,11 @@ fn write_json(writer: &mut impl Write, result: &ScanResult) -> io::Result<()> {
     writeln!(writer)
 }
 
-fn write_diff_json(writer: &mut impl Write, diff: &DiffExecution) -> io::Result<()> {
+fn write_diff_json(
+    writer: &mut impl Write,
+    diff: &DiffExecution,
+    context: Option<NonZeroU64>,
+) -> io::Result<()> {
     let result = &diff.result;
     let report = JsonDiffReport {
         schema_version: JSON_SCHEMA_VERSION,
@@ -427,6 +481,7 @@ fn write_diff_json(writer: &mut impl Write, diff: &DiffExecution) -> io::Result<
             },
         },
         tokens: &result.tokens,
+        context: context.map(|context| ContextComparison::new(result.head.tokens, context)),
         languages: &result.languages,
         files: result
             .files
@@ -522,6 +577,8 @@ struct JsonReport<'a> {
     tokenizer: &'a TokenizerMetadata,
     text_policy: JsonTextPolicy,
     totals: &'a ScanTotals,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<ContextComparison>,
     languages: &'a [tokm_core::LanguageResult],
     files: Vec<JsonFile>,
     skipped: JsonSkipped,
@@ -535,8 +592,36 @@ struct JsonDiffReport<'a> {
     text_policy: JsonTextPolicy,
     snapshots: JsonDiffSnapshots<'a>,
     tokens: &'a TokenDelta,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<ContextComparison>,
     languages: &'a [tokm_core::LanguageDelta],
     files: Vec<JsonDiffFile>,
+}
+
+#[derive(Serialize)]
+struct ContextComparison {
+    window_tokens: u64,
+    utilization_percent: f64,
+    remaining_tokens: u64,
+    exceeded_by_tokens: u64,
+    #[serde(skip)]
+    utilization_percent_tenths: u128,
+}
+
+impl ContextComparison {
+    fn new(tokens: u64, window: NonZeroU64) -> Self {
+        let window_tokens = window.get();
+        let utilization_percent_tenths =
+            (u128::from(tokens) * 1000 + u128::from(window_tokens) / 2) / u128::from(window_tokens);
+
+        Self {
+            window_tokens,
+            utilization_percent: utilization_percent_tenths as f64 / 10.0,
+            remaining_tokens: window_tokens.saturating_sub(tokens),
+            exceeded_by_tokens: tokens.saturating_sub(window_tokens),
+            utilization_percent_tenths,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -611,7 +696,9 @@ impl From<&SkipDetail> for JsonSkipDetail {
 
 #[cfg(test)]
 mod tests {
-    use super::{allocated_percent_tenths, format_number, format_signed};
+    use std::num::NonZeroU64;
+
+    use super::{ContextComparison, allocated_percent_tenths, format_number, format_signed};
 
     #[test]
     fn largest_remainder_percentages_sum_to_exactly_one_hundred() {
@@ -627,5 +714,18 @@ mod tests {
         assert_eq!(format_number(135_641), "135,641");
         assert_eq!(format_signed(12_402), "+12,402");
         assert_eq!(format_signed(-6_029), "-6,029");
+    }
+
+    #[test]
+    fn context_comparison_handles_remaining_and_exceeded_tokens() {
+        let within = ContextComparison::new(93_241, NonZeroU64::new(128_000).unwrap());
+        let exceeded = ContextComparison::new(150, NonZeroU64::new(100).unwrap());
+
+        assert_eq!(within.utilization_percent_tenths, 728);
+        assert_eq!(within.remaining_tokens, 34_759);
+        assert_eq!(within.exceeded_by_tokens, 0);
+        assert_eq!(exceeded.utilization_percent_tenths, 1500);
+        assert_eq!(exceeded.remaining_tokens, 0);
+        assert_eq!(exceeded.exceeded_by_tokens, 50);
     }
 }

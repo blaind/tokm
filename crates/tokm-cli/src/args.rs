@@ -1,6 +1,6 @@
 //! Command-line contract and conversion to core options.
 
-use std::{num::NonZeroUsize, path::PathBuf};
+use std::{num::NonZeroU64, num::NonZeroUsize, path::PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use tokm_core::{
@@ -75,6 +75,10 @@ pub(crate) struct Args {
         help_heading = "Display"
     )]
     pub(crate) sort: SortField,
+
+    /// Compare the measured total with a context-window size.
+    #[arg(long, global = true, value_name = "TOKENS", help_heading = "Display")]
+    pub(crate) context: Option<NonZeroU64>,
 
     /// Include paths matching this glob; may be repeated.
     #[arg(long, global = true, value_name = "GLOB", help_heading = "Filtering")]
@@ -327,6 +331,12 @@ mod tests {
 
         assert_eq!(limited.max_file_size, MaxFileSize::Limited(3 * 1024 * 1024));
         assert_eq!(unlimited.max_file_size, MaxFileSize::Unlimited);
+    }
+
+    #[test]
+    fn context_window_must_be_positive() {
+        assert!(Args::try_parse_from(["tokm", "--context", "128000"]).is_ok());
+        assert!(Args::try_parse_from(["tokm", "--context", "0"]).is_err());
     }
 
     #[test]
