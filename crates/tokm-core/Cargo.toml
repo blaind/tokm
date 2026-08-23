@@ -6,5 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 description = "Token measurement engine for tokm"
 
+[features]
+default = ["builtin-tokenizers"]
+builtin-tokenizers = ["dep:tiktoken-rs"]
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+tiktoken-rs = { workspace = true, optional = true }
+
 [lints]
 workspace = true
