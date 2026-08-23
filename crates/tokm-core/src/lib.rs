@@ -1,6 +1,8 @@
 //! Shared token measurement semantics for `tokm` interfaces.
 
 mod aggregate;
+#[cfg(feature = "cache")]
+mod cache;
 mod classify;
 mod count;
 mod decode;

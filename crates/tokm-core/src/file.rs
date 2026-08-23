@@ -9,11 +9,18 @@ use std::{
 
 use serde::Serialize;
 
+#[cfg(feature = "cache")]
+use crate::cache::{Cache, CachePolicy, CachedCount};
 use crate::{
     CountError, CountOptions, TextPolicyMetadata, classify, count_text,
     decode::{DecodeOutcome, decode},
     tokenizer::TokenizerMetadata,
 };
+
+#[cfg(feature = "cache")]
+type ActiveCache = Option<Cache>;
+#[cfg(not(feature = "cache"))]
+type ActiveCache = ();
 
 /// Default maximum size of one measured file: 20 MiB.
 pub const DEFAULT_MAX_FILE_SIZE: u64 = 20 * 1024 * 1024;
@@ -81,6 +88,8 @@ pub struct ScanOptions {
     no_ignore: bool,
     follow_symlinks: bool,
     workers: NonZeroUsize,
+    #[cfg(feature = "cache")]
+    cache: CachePolicy,
 }
 
 impl ScanOptions {
@@ -97,6 +106,8 @@ impl ScanOptions {
             no_ignore: false,
             follow_symlinks: false,
             workers: default_workers(),
+            #[cfg(feature = "cache")]
+            cache: CachePolicy::Default,
         }
     }
 
@@ -156,6 +167,26 @@ impl ScanOptions {
         self
     }
 
+    /// Enable or disable persistent content-addressed caching.
+    #[cfg(feature = "cache")]
+    #[must_use]
+    pub fn with_cache_enabled(mut self, enabled: bool) -> Self {
+        self.cache = if enabled {
+            CachePolicy::Default
+        } else {
+            CachePolicy::Disabled
+        };
+        self
+    }
+
+    /// Use an explicit persistent cache directory.
+    #[cfg(feature = "cache")]
+    #[must_use]
+    pub fn with_cache_directory(mut self, path: impl Into<PathBuf>) -> Self {
+        self.cache = CachePolicy::Directory(path.into());
+        self
+    }
+
     /// Return the shared text-counting options.
     #[must_use]
     pub const fn count_options(&self) -> &CountOptions {
@@ -196,6 +227,11 @@ impl ScanOptions {
 
     pub(crate) const fn workers(&self) -> NonZeroUsize {
         self.workers
+    }
+
+    #[cfg(feature = "cache")]
+    pub(crate) const fn cache_policy(&self) -> &CachePolicy {
+        &self.cache
     }
 }
 
@@ -300,7 +336,22 @@ pub fn count_file(
     path: impl Into<PathBuf>,
     options: &ScanOptions,
 ) -> Result<FileOutcome, CountError> {
-    let path = path.into();
+    #[cfg(feature = "cache")]
+    let cache = Cache::resolve(options.cache_policy());
+    #[cfg(not(feature = "cache"))]
+    let cache = ();
+
+    count_file_with_cache(path.into(), options, &cache)
+}
+
+pub(crate) fn count_file_with_cache(
+    path: PathBuf,
+    options: &ScanOptions,
+    cache: &ActiveCache,
+) -> Result<FileOutcome, CountError> {
+    #[cfg(not(feature = "cache"))]
+    let _ = cache;
+
     let link_metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(_) => return Ok(skipped(path, SkipReason::Unreadable, None)),
@@ -325,6 +376,22 @@ pub fn count_file(
         return Ok(skipped(path, SkipReason::Oversized, None));
     }
 
+    #[cfg(feature = "cache")]
+    let metadata_snapshot = Cache::metadata_snapshot(&metadata);
+    #[cfg(feature = "cache")]
+    if let Some(cached) = cache.as_ref().and_then(|cache| {
+        let content_hash = cache.lookup_content_hash(&path, metadata_snapshot)?;
+        cache.lookup_count(&content_hash, &options.count, options.invalid_utf8)
+    }) {
+        return Ok(measured(
+            path,
+            metadata.len(),
+            cached.tokens,
+            cached.decoded_lossily,
+            options,
+        ));
+    }
+
     let bytes = match read_bounded(&path, options.max_file_size) {
         Ok(Some(bytes)) => bytes,
         Ok(None) => return Ok(skipped(path, SkipReason::Oversized, None)),
@@ -340,18 +407,67 @@ pub fn count_file(
             return Ok(skipped(path, reason, detail.map(str::to_owned)));
         }
     };
-    let count = count_text(&text, &options.count)?;
+    #[cfg(feature = "cache")]
+    let content_hash = Cache::content_hash(&bytes);
+    #[cfg(feature = "cache")]
+    let tokens = cache
+        .as_ref()
+        .and_then(|cache| cache.lookup_count(&content_hash, &options.count, options.invalid_utf8))
+        .filter(|cached| cached.decoded_lossily == decoded_lossily)
+        .map_or_else(
+            || count_text(&text, &options.count).map(|result| result.tokens),
+            |cached| Ok(cached.tokens),
+        )?;
+    #[cfg(not(feature = "cache"))]
+    let tokens = count_text(&text, &options.count)?.tokens;
+    let byte_count =
+        u64::try_from(bytes.len()).map_err(|_| crate::TokenizerError::CountOverflow)?;
 
-    Ok(FileOutcome::Measured(FileResult {
+    #[cfg(feature = "cache")]
+    if let Some(cache) = cache {
+        cache.store_count(
+            &content_hash,
+            &options.count,
+            options.invalid_utf8,
+            CachedCount {
+                tokens,
+                decoded_lossily,
+            },
+        );
+        let current_metadata = if options.follow_symlinks {
+            fs::metadata(&path)
+        } else {
+            fs::symlink_metadata(&path)
+        };
+        if current_metadata
+            .ok()
+            .map(|metadata| Cache::metadata_snapshot(&metadata))
+            == Some(metadata_snapshot)
+        {
+            cache.store_content_hash(&path, metadata_snapshot, &content_hash);
+        }
+    }
+
+    Ok(measured(path, byte_count, tokens, decoded_lossily, options))
+}
+
+fn measured(
+    path: PathBuf,
+    bytes: u64,
+    tokens: u64,
+    decoded_lossily: bool,
+    options: &ScanOptions,
+) -> FileOutcome {
+    FileOutcome::Measured(FileResult {
         language: classify(&path),
         path,
-        tokens: count.tokens,
-        bytes: u64::try_from(bytes.len()).map_err(|_| crate::TokenizerError::CountOverflow)?,
+        tokens,
+        bytes,
         decoded_lossily,
-        tokenizer: count.tokenizer,
-        text_policy: count.text_policy,
+        tokenizer: options.count.tokenizer().metadata().clone(),
+        text_policy: options.count.text_policy().metadata(),
         invalid_utf8: options.invalid_utf8,
-    }))
+    })
 }
 
 fn default_workers() -> NonZeroUsize {
@@ -390,13 +506,17 @@ mod tests {
     use super::{FileOutcome, InvalidUtf8Policy, MaxFileSize, ScanOptions, SkipReason, count_file};
     use crate::Language;
 
+    fn options() -> ScanOptions {
+        ScanOptions::default().with_cache_enabled(false)
+    }
+
     #[test]
     fn measures_a_classified_utf8_file() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("main.rs");
         fs::write(&path, "fn main() {}\n").unwrap();
 
-        let outcome = count_file(&path, &ScanOptions::default()).unwrap();
+        let outcome = count_file(&path, &options()).unwrap();
 
         let FileOutcome::Measured(result) = outcome else {
             panic!("text file was skipped");
@@ -414,10 +534,10 @@ mod tests {
         fs::write(&binary_path, [b'a', 0, b'b']).unwrap();
         fs::write(&large_path, "four").unwrap();
 
-        let binary = count_file(&binary_path, &ScanOptions::default()).unwrap();
+        let binary = count_file(&binary_path, &options()).unwrap();
         let oversized = count_file(
             &large_path,
-            &ScanOptions::default().with_max_file_size(MaxFileSize::Limited(3)),
+            &options().with_max_file_size(MaxFileSize::Limited(3)),
         )
         .unwrap();
 
@@ -437,10 +557,10 @@ mod tests {
         let path = directory.path().join("invalid.txt");
         fs::write(&path, [b'a', 0xff, b'b']).unwrap();
 
-        let skipped = count_file(&path, &ScanOptions::default()).unwrap();
+        let skipped = count_file(&path, &options()).unwrap();
         let lossy = count_file(
             &path,
-            &ScanOptions::default().with_invalid_utf8(InvalidUtf8Policy::Lossy),
+            &options().with_invalid_utf8(InvalidUtf8Policy::Lossy),
         )
         .unwrap();
 

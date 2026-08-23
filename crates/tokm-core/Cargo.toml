@@ -7,19 +7,25 @@ license.workspace = true
 description = "Token measurement engine for tokm"
 
 [features]
-default = ["builtin-tokenizers"]
+default = ["builtin-tokenizers", "cache"]
 builtin-tokenizers = ["dep:tiktoken-rs"]
+cache = ["dep:blake3", "dep:directories", "dep:fs2", "dep:serde_json"]
 
 [dependencies]
+blake3 = { workspace = true, optional = true }
+directories = { workspace = true, optional = true }
+fs2 = { workspace = true, optional = true }
 globset.workspace = true
 ignore.workspace = true
 path-clean.workspace = true
 rayon.workspace = true
 serde.workspace = true
+serde_json = { workspace = true, optional = true }
 thiserror.workspace = true
 tiktoken-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
+filetime = "0.2"
 tempfile = "3"
 
 [lints]
