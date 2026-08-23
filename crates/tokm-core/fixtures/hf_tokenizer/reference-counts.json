@@ -1,0 +1,24 @@
+{
+  "reference": "huggingface-tokenizers-python-0.22.2",
+  "add_special_tokens": false,
+  "counts": [
+    { "text": "", "tokens": 0 },
+    { "text": "hello world", "tokens": 2 },
+    { "text": "HÉLLO WORLD", "tokens": 2 },
+    { "text": "hello rust token measurement", "tokens": 4 },
+    { "text": "<s>", "tokens": 1 },
+    { "text": "</s>", "tokens": 1 },
+    { "text": "[CLS]", "tokens": 1 },
+    { "text": "[SEP]", "tokens": 1 },
+    { "text": "<|im_start|>", "tokens": 1 },
+    { "text": "<|endoftext|>", "tokens": 1 },
+    { "text": "<s> hello </s>", "tokens": 3 },
+    { "text": "hello<|im_start|>world", "tokens": 3 },
+    { "text": "你好 世界", "tokens": 2 }
+  ],
+  "framing_control": {
+    "text": "hello world",
+    "add_special_tokens": true,
+    "tokens": 4
+  }
+}
