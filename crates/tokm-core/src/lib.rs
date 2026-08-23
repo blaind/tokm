@@ -16,7 +16,10 @@ mod text_policy;
 pub mod tokenizer;
 mod walk;
 
-pub use aggregate::{LanguageResult, ScanFileResult, ScanResult, ScanTotals, SkippedSummary};
+pub use aggregate::{
+    DirectoryResult, LanguageResult, ScanFileResult, ScanResult, ScanTotals, SkippedSummary,
+    aggregate_directories,
+};
 pub use classify::{Language, classify};
 pub use count::{CountOptions, CountResult, count_text};
 pub use diff::{DiffFileResult, DiffResult, LanguageDelta, TokenDelta, compare_snapshots};

@@ -1,7 +1,12 @@
 //! Deterministic scan aggregation.
 
-use std::{cmp::Reverse, collections::BTreeMap, path::PathBuf};
+use std::{
+    cmp::Reverse,
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
+use path_clean::PathClean;
 use serde::Serialize;
 
 use crate::{
@@ -38,6 +43,22 @@ pub struct LanguageResult {
     pub bytes: u64,
 }
 
+/// Recursive totals for one logical directory.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DirectoryResult {
+    /// Directory path, with `.` representing a relative scan root.
+    pub path: PathBuf,
+
+    /// Number of measured files beneath this directory.
+    pub files: u64,
+
+    /// Sum of token counts beneath this directory.
+    pub tokens: u64,
+
+    /// Sum of original file sizes beneath this directory.
+    pub bytes: u64,
+}
+
 /// Compact per-file entry returned by a recursive scan.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ScanFileResult {
@@ -66,6 +87,93 @@ impl From<FileResult> for ScanFileResult {
             bytes: result.bytes,
             decoded_lossily: result.decoded_lossily,
         }
+    }
+}
+
+/// Roll measured files into every ancestor directory up to their input root.
+///
+/// Roots use the same logical paths as scan inputs. A root equal to a measured
+/// file is treated as an explicit file input and rolls up to its parent. When
+/// roots overlap, the widest matching root wins so each file contributes once
+/// to the complete recursive hierarchy.
+pub fn aggregate_directories<I, P>(
+    files: &[ScanFileResult],
+    roots: I,
+) -> Result<Vec<DirectoryResult>, ScanError>
+where
+    I: IntoIterator<Item = P>,
+    P: Into<PathBuf>,
+{
+    let roots = roots
+        .into_iter()
+        .map(Into::into)
+        .map(normalize_root)
+        .collect::<Vec<_>>();
+    let mut by_directory: BTreeMap<PathBuf, ScanTotals> = BTreeMap::new();
+
+    for file in files {
+        let path = file.path.clone().clean();
+        let directory = path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
+        let root = roots
+            .iter()
+            .map(|root| {
+                if root == &path {
+                    directory.clone()
+                } else {
+                    root.clone()
+                }
+            })
+            .filter(|root| is_within(&directory, root))
+            .min_by_key(|root| root.components().count())
+            .unwrap_or_else(|| directory.clone());
+        let mut current = directory;
+
+        loop {
+            let display_path = if current.as_os_str().is_empty() {
+                PathBuf::from(".")
+            } else {
+                current.clone()
+            };
+            add_file(
+                by_directory.entry(display_path).or_default(),
+                file.tokens,
+                file.bytes,
+            )?;
+            if current == root {
+                break;
+            }
+            let Some(parent) = current.parent() else {
+                break;
+            };
+            current = parent.to_path_buf();
+        }
+    }
+
+    Ok(by_directory
+        .into_iter()
+        .map(|(path, totals)| DirectoryResult {
+            path,
+            files: totals.files,
+            tokens: totals.tokens,
+            bytes: totals.bytes,
+        })
+        .collect())
+}
+
+fn normalize_root(path: PathBuf) -> PathBuf {
+    let path = path.clean();
+    if path == Path::new(".") {
+        PathBuf::new()
+    } else {
+        path
+    }
+}
+
+fn is_within(path: &Path, root: &Path) -> bool {
+    if root.as_os_str().is_empty() {
+        !path.is_absolute()
+    } else {
+        path.starts_with(root)
     }
 }
 
@@ -201,4 +309,78 @@ fn add_file(totals: &mut ScanTotals, tokens: u64, bytes: u64) -> Result<(), Scan
         .ok_or(ScanError::AggregateOverflow)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{ScanFileResult, aggregate_directories};
+    use crate::Language;
+
+    fn file(path: &str, tokens: u64, bytes: u64) -> ScanFileResult {
+        ScanFileResult {
+            path: PathBuf::from(path),
+            language: Language::Rust,
+            tokens,
+            bytes,
+            decoded_lossily: false,
+        }
+    }
+
+    #[test]
+    fn directory_totals_roll_up_recursively_to_the_scan_root() {
+        let files = [
+            file("src/api/server.rs", 10, 100),
+            file("src/main.rs", 5, 50),
+            file("README.md", 3, 30),
+        ];
+
+        let directories = aggregate_directories(&files, ["."]).unwrap();
+
+        assert_eq!(
+            directories
+                .iter()
+                .map(|directory| (
+                    directory.path.to_string_lossy().into_owned(),
+                    directory.files,
+                    directory.tokens,
+                    directory.bytes,
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (".".to_owned(), 3, 18, 180),
+                ("src".to_owned(), 2, 15, 150),
+                ("src/api".to_owned(), 1, 10, 100),
+            ]
+        );
+    }
+
+    #[test]
+    fn overlapping_roots_do_not_double_count_files() {
+        let files = [file("src/lib.rs", 7, 20)];
+
+        let directories = aggregate_directories(&files, [".", "src"]).unwrap();
+
+        assert_eq!(directories.len(), 2);
+        assert!(directories.iter().all(|directory| directory.files == 1));
+        assert_eq!(
+            directories
+                .iter()
+                .map(|directory| directory.tokens)
+                .sum::<u64>(),
+            14
+        );
+    }
+
+    #[test]
+    fn explicit_file_inputs_roll_up_to_their_parent() {
+        let files = [file("docs/guide.md", 4, 12)];
+
+        let directories = aggregate_directories(&files, ["docs/guide.md"]).unwrap();
+
+        assert_eq!(directories.len(), 1);
+        assert_eq!(directories[0].path, PathBuf::from("docs"));
+        assert_eq!(directories[0].tokens, 4);
+    }
 }
