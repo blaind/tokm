@@ -41,5 +41,9 @@ tempfile.workspace = true
 name = "micro"
 harness = false
 
+[[bench]]
+name = "scan_workloads"
+harness = false
+
 [lints]
 workspace = true
