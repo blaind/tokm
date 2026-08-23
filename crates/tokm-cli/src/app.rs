@@ -3,31 +3,99 @@
 use std::{fmt, io, io::Read, path::PathBuf};
 
 use tokm_core::{
-    ByteOutcome, ByteSkip, Language, LanguageResult, MaxFileSize, ScanFileResult, ScanOptions,
-    ScanResult, ScanTotals, SkipDetail, SkipReason, SkippedSummary, count_bytes, scan,
+    ByteOutcome, ByteSkip, DiffResult, Language, LanguageResult, MaxFileSize, ScanFileResult,
+    ScanOptions, ScanResult, ScanTotals, SkipDetail, SkipReason, SkippedSummary, count_bytes,
+    git::{diff_trees, diff_worktree},
+    scan,
 };
 
-use crate::args::{Args, InputMode};
+use crate::args::{Args, Command, InputMode};
 
-pub(crate) fn execute(args: &Args) -> Result<ScanResult, CliError> {
-    let input = args.input_mode().map_err(CliError::Usage)?;
+pub(crate) fn execute(args: &Args) -> Result<Execution, CliError> {
     let options = args
         .scan_options()
         .map_err(|error| CliError::Operational(error.to_string()))?;
 
-    match input {
-        InputMode::Filesystem(paths) => {
-            scan(paths, &options).map_err(|error| CliError::Operational(error.to_string()))
+    match &args.command {
+        Some(Command::Diff {
+            comparison,
+            repository,
+        }) => execute_diff(comparison, repository, &options),
+        None => execute_scan(args, &options),
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum Execution {
+    Scan(ScanResult),
+    Diff(DiffExecution),
+}
+
+impl Execution {
+    pub(crate) const fn measured_tokens(&self) -> u64 {
+        match self {
+            Self::Scan(result) => result.totals.tokens,
+            Self::Diff(diff) => diff.result.head.tokens,
         }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct DiffExecution {
+    pub(crate) base: String,
+    pub(crate) head: String,
+    pub(crate) result: DiffResult,
+}
+
+fn execute_scan(args: &Args, options: &ScanOptions) -> Result<Execution, CliError> {
+    let input = args.input_mode().map_err(CliError::Usage)?;
+
+    match input {
+        InputMode::Filesystem(paths) => scan(paths, options)
+            .map(Execution::Scan)
+            .map_err(|error| CliError::Operational(error.to_string())),
         InputMode::Stdin => {
             let stdin = io::stdin();
             let bytes = read_bounded(stdin.lock(), options.max_file_size())
                 .map_err(|error| CliError::Operational(format!("cannot read stdin: {error}")))?;
-            let outcome = count_bytes(&bytes, &options)
+            let outcome = count_bytes(&bytes, options)
                 .map_err(|error| CliError::Operational(error.to_string()))?;
 
-            Ok(stdin_result(outcome, &options))
+            Ok(Execution::Scan(stdin_result(outcome, options)))
         }
+    }
+}
+
+fn execute_diff(
+    comparison: &str,
+    repository: &std::path::Path,
+    options: &ScanOptions,
+) -> Result<Execution, CliError> {
+    if let Some((base, head)) = comparison.split_once("..") {
+        if base.is_empty() || head.is_empty() || head.starts_with('.') || head.contains("..") {
+            return Err(CliError::Usage(
+                "Git tree comparison must use non-empty A..B revisions".to_owned(),
+            ));
+        }
+        let result = diff_trees(repository, base, head, options)
+            .map_err(|error| CliError::Operational(error.to_string()))?;
+        Ok(Execution::Diff(DiffExecution {
+            base: base.to_owned(),
+            head: head.to_owned(),
+            result,
+        }))
+    } else if comparison.is_empty() {
+        Err(CliError::Usage(
+            "Git base revision cannot be empty".to_owned(),
+        ))
+    } else {
+        let result = diff_worktree(repository, comparison, options)
+            .map_err(|error| CliError::Operational(error.to_string()))?;
+        Ok(Execution::Diff(DiffExecution {
+            base: comparison.to_owned(),
+            head: "worktree".to_owned(),
+            result,
+        }))
     }
 }
 

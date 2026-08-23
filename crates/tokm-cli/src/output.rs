@@ -4,32 +4,60 @@ use std::{cmp::Ordering, io, io::Write, path::Path};
 
 use serde::Serialize;
 use tokm_core::{
-    InvalidUtf8Policy, Language, ScanFileResult, ScanResult, ScanTotals, SkipDetail,
-    SkippedSummary, tokenizer::TokenizerMetadata,
+    DiffFileResult, DiffResult, InvalidUtf8Policy, Language, ScanFileResult, ScanResult,
+    ScanTotals, SkipDetail, SkippedSummary, TokenDelta, tokenizer::TokenizerMetadata,
 };
 
-use crate::args::{Args, OutputFormat, SortField};
+use crate::{
+    app::{DiffExecution, Execution},
+    args::{Args, OutputFormat, SortField},
+};
 
 const JSON_SCHEMA_VERSION: u32 = 1;
 
 pub(crate) fn write_report(
     mut writer: impl Write,
-    result: &ScanResult,
+    result: &Execution,
     args: &Args,
 ) -> io::Result<()> {
-    match args.format {
-        OutputFormat::Json => write_json(&mut writer, result),
-        OutputFormat::Table if args.quiet => Ok(()),
-        OutputFormat::Table if args.files => write_file_table(&mut writer, result, args.sort),
-        OutputFormat::Table => write_language_table(&mut writer, result),
+    match result {
+        Execution::Scan(result) => write_scan_report(&mut writer, result, args),
+        Execution::Diff(diff) => write_diff_report(&mut writer, diff, args),
     }
 }
 
-pub(crate) fn write_verbose_skips(mut writer: impl Write, result: &ScanResult) -> io::Result<()> {
-    for detail in &result.skipped.details {
+fn write_scan_report(writer: &mut impl Write, result: &ScanResult, args: &Args) -> io::Result<()> {
+    match args.format {
+        OutputFormat::Json => write_json(writer, result),
+        OutputFormat::Table if args.quiet => Ok(()),
+        OutputFormat::Table if args.files => write_file_table(writer, result, args.sort),
+        OutputFormat::Table => write_language_table(writer, result),
+    }
+}
+
+pub(crate) fn write_verbose_skips(mut writer: impl Write, result: &Execution) -> io::Result<()> {
+    match result {
+        Execution::Scan(result) => write_skip_details(&mut writer, None, &result.skipped.details),
+        Execution::Diff(diff) => {
+            write_skip_details(&mut writer, Some("base"), &diff.result.base_skipped.details)?;
+            write_skip_details(&mut writer, Some("head"), &diff.result.head_skipped.details)
+        }
+    }
+}
+
+fn write_skip_details(
+    writer: &mut impl Write,
+    snapshot: Option<&str>,
+    details: &[SkipDetail],
+) -> io::Result<()> {
+    for detail in details {
+        write!(writer, "skipped")?;
+        if let Some(snapshot) = snapshot {
+            write!(writer, " [{snapshot}]")?;
+        }
         write!(
             writer,
-            "skipped ({}): {}",
+            " ({}): {}",
             detail.reason.as_str(),
             detail.path.display()
         )?;
@@ -55,6 +83,126 @@ pub(crate) fn write_budget_failure(
         "  Exceeded by: {} tokens",
         format_number(total - budget)
     )
+}
+
+fn write_diff_report(writer: &mut impl Write, diff: &DiffExecution, args: &Args) -> io::Result<()> {
+    match args.format {
+        OutputFormat::Json => write_diff_json(writer, diff),
+        OutputFormat::Table if args.quiet => Ok(()),
+        OutputFormat::Table => write_diff_table(writer, diff, args),
+    }
+}
+
+fn write_diff_table(writer: &mut impl Write, diff: &DiffExecution, args: &Args) -> io::Result<()> {
+    let result = &diff.result;
+    writeln!(writer, " Token delta ({} -> {})", diff.base, diff.head)?;
+    writeln!(writer, "{}", "-".repeat(42))?;
+    writeln!(
+        writer,
+        " Added tokens          +{}",
+        format_number(result.tokens.added)
+    )?;
+    writeln!(
+        writer,
+        " Removed tokens        -{}",
+        format_number(result.tokens.removed)
+    )?;
+    writeln!(
+        writer,
+        " Net                    {}",
+        format_signed(result.tokens.net)
+    )?;
+
+    if args.files {
+        write_diff_file_table(writer, result, args.sort)?;
+    } else {
+        write_diff_language_table(writer, result)?;
+    }
+    write_diff_skip_summary(writer, "Base", &result.base_skipped)?;
+    write_diff_skip_summary(writer, "Head", &result.head_skipped)
+}
+
+fn write_diff_language_table(writer: &mut impl Write, result: &DiffResult) -> io::Result<()> {
+    if result.languages.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(writer)?;
+    writeln!(
+        writer,
+        " Language                       Added       Removed           Net"
+    )?;
+    writeln!(writer, "{}", "-".repeat(66))?;
+    for language in &result.languages {
+        writeln!(
+            writer,
+            " {:<26}  {:>11}  {:>11}  {:>12}",
+            language.name.as_str(),
+            format!("+{}", format_number(language.tokens.added)),
+            format!("-{}", format_number(language.tokens.removed)),
+            format_signed(language.tokens.net),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn write_diff_file_table(
+    writer: &mut impl Write,
+    result: &DiffResult,
+    sort: SortField,
+) -> io::Result<()> {
+    if result.files.is_empty() {
+        return Ok(());
+    }
+    let mut files = result.files.iter().collect::<Vec<_>>();
+    files.sort_by(|left, right| compare_diff_files(left, right, sort));
+
+    writeln!(writer)?;
+    writeln!(writer, "          Net  Language          File")?;
+    writeln!(writer, "{}", "-".repeat(66))?;
+    for file in files {
+        writeln!(
+            writer,
+            " {:>12}  {:<16}  {}",
+            format_signed(file.tokens.net),
+            file.language.as_str(),
+            file.path.display(),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn compare_diff_files(left: &DiffFileResult, right: &DiffFileResult, sort: SortField) -> Ordering {
+    match sort {
+        SortField::Tokens => diff_impact(right)
+            .cmp(&diff_impact(left))
+            .then_with(|| left.path.cmp(&right.path)),
+        SortField::Path => left.path.cmp(&right.path),
+        SortField::Language => left
+            .language
+            .as_str()
+            .cmp(right.language.as_str())
+            .then_with(|| left.path.cmp(&right.path)),
+    }
+}
+
+fn diff_impact(file: &DiffFileResult) -> u128 {
+    u128::from(file.tokens.added) + u128::from(file.tokens.removed)
+}
+
+fn write_diff_skip_summary(
+    writer: &mut impl Write,
+    snapshot: &str,
+    skipped: &SkippedSummary,
+) -> io::Result<()> {
+    if skipped.total == 0 {
+        return Ok(());
+    }
+    writeln!(writer)?;
+    writeln!(writer, "{snapshot} snapshot:")?;
+    write_skip_summary(writer, skipped)
 }
 
 fn write_language_table(writer: &mut impl Write, result: &ScanResult) -> io::Result<()> {
@@ -237,12 +385,6 @@ fn write_json(writer: &mut impl Write, result: &ScanResult) -> io::Result<()> {
             decoded_lossily: file.decoded_lossily,
         })
         .collect();
-    let details = result
-        .skipped
-        .details
-        .iter()
-        .map(JsonSkipDetail::from)
-        .collect();
     let report = JsonReport {
         schema_version: JSON_SCHEMA_VERSION,
         tokenizer: &result.tokenizer,
@@ -254,21 +396,67 @@ fn write_json(writer: &mut impl Write, result: &ScanResult) -> io::Result<()> {
         totals: &result.totals,
         languages: &result.languages,
         files,
-        skipped: JsonSkipped {
-            total: result.skipped.total,
-            binary: result.skipped.binary,
-            oversized: result.skipped.oversized,
-            invalid_utf8: result.skipped.invalid_utf8,
-            unsupported_encoding: result.skipped.unsupported_encoding,
-            unreadable: result.skipped.unreadable,
-            unsupported_filesystem_type: result.skipped.unsupported_filesystem_type,
-            symlink: result.skipped.symlink,
-            details,
-        },
+        skipped: json_skipped(&result.skipped),
     };
 
     serde_json::to_writer_pretty(&mut *writer, &report).map_err(io::Error::other)?;
     writeln!(writer)
+}
+
+fn write_diff_json(writer: &mut impl Write, diff: &DiffExecution) -> io::Result<()> {
+    let result = &diff.result;
+    let report = JsonDiffReport {
+        schema_version: JSON_SCHEMA_VERSION,
+        report: "diff",
+        tokenizer: &result.tokenizer,
+        text_policy: JsonTextPolicy {
+            mode: result.text_policy.mode,
+            version: result.text_policy.version,
+            invalid_utf8: result.invalid_utf8,
+        },
+        snapshots: JsonDiffSnapshots {
+            base: JsonDiffSnapshot {
+                name: &diff.base,
+                totals: &result.base,
+                skipped: json_skipped(&result.base_skipped),
+            },
+            head: JsonDiffSnapshot {
+                name: &diff.head,
+                totals: &result.head,
+                skipped: json_skipped(&result.head_skipped),
+            },
+        },
+        tokens: &result.tokens,
+        languages: &result.languages,
+        files: result
+            .files
+            .iter()
+            .map(|file| JsonDiffFile {
+                path: machine_path(&file.path),
+                language: file.language,
+                base_tokens: file.base_tokens,
+                head_tokens: file.head_tokens,
+                tokens: file.tokens,
+            })
+            .collect(),
+    };
+
+    serde_json::to_writer_pretty(&mut *writer, &report).map_err(io::Error::other)?;
+    writeln!(writer)
+}
+
+fn json_skipped(skipped: &SkippedSummary) -> JsonSkipped {
+    JsonSkipped {
+        total: skipped.total,
+        binary: skipped.binary,
+        oversized: skipped.oversized,
+        invalid_utf8: skipped.invalid_utf8,
+        unsupported_encoding: skipped.unsupported_encoding,
+        unreadable: skipped.unreadable,
+        unsupported_filesystem_type: skipped.unsupported_filesystem_type,
+        symlink: skipped.symlink,
+        details: skipped.details.iter().map(JsonSkipDetail::from).collect(),
+    }
 }
 
 fn allocated_percent_tenths(tokens: &[u64]) -> Vec<u16> {
@@ -297,6 +485,15 @@ fn allocated_percent_tenths(tokens: &[u64]) -> Vec<u16> {
 }
 
 fn format_number(value: u64) -> String {
+    format_unsigned(u128::from(value))
+}
+
+fn format_signed(value: i128) -> String {
+    let sign = if value < 0 { '-' } else { '+' };
+    format!("{sign}{}", format_unsigned(value.unsigned_abs()))
+}
+
+fn format_unsigned(value: u128) -> String {
     let digits = value.to_string();
     let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, character) in digits.chars().enumerate() {
@@ -331,6 +528,31 @@ struct JsonReport<'a> {
 }
 
 #[derive(Serialize)]
+struct JsonDiffReport<'a> {
+    schema_version: u32,
+    report: &'static str,
+    tokenizer: &'a TokenizerMetadata,
+    text_policy: JsonTextPolicy,
+    snapshots: JsonDiffSnapshots<'a>,
+    tokens: &'a TokenDelta,
+    languages: &'a [tokm_core::LanguageDelta],
+    files: Vec<JsonDiffFile>,
+}
+
+#[derive(Serialize)]
+struct JsonDiffSnapshots<'a> {
+    base: JsonDiffSnapshot<'a>,
+    head: JsonDiffSnapshot<'a>,
+}
+
+#[derive(Serialize)]
+struct JsonDiffSnapshot<'a> {
+    name: &'a str,
+    totals: &'a ScanTotals,
+    skipped: JsonSkipped,
+}
+
+#[derive(Serialize)]
 struct JsonTextPolicy {
     mode: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -345,6 +567,15 @@ struct JsonFile {
     tokens: u64,
     bytes: u64,
     decoded_lossily: bool,
+}
+
+#[derive(Serialize)]
+struct JsonDiffFile {
+    path: String,
+    language: Language,
+    base_tokens: Option<u64>,
+    head_tokens: Option<u64>,
+    tokens: TokenDelta,
 }
 
 #[derive(Serialize)]
@@ -380,7 +611,7 @@ impl From<&SkipDetail> for JsonSkipDetail {
 
 #[cfg(test)]
 mod tests {
-    use super::{allocated_percent_tenths, format_number};
+    use super::{allocated_percent_tenths, format_number, format_signed};
 
     #[test]
     fn largest_remainder_percentages_sum_to_exactly_one_hundred() {
@@ -394,5 +625,7 @@ mod tests {
     fn number_formatting_uses_stable_ascii_grouping() {
         assert_eq!(format_number(0), "0");
         assert_eq!(format_number(135_641), "135,641");
+        assert_eq!(format_signed(12_402), "+12,402");
+        assert_eq!(format_signed(-6_029), "-6,029");
     }
 }

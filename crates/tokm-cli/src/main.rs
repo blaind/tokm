@@ -45,12 +45,11 @@ fn main() -> ExitCode {
     }
 
     if let Some(budget) = args.max_tokens
-        && result.totals.tokens > budget
+        && result.measured_tokens() > budget
     {
+        let measured_tokens = result.measured_tokens();
         let stderr = io::stderr();
-        if let Err(error) =
-            output::write_budget_failure(stderr.lock(), result.totals.tokens, budget)
-        {
+        if let Err(error) = output::write_budget_failure(stderr.lock(), measured_tokens, budget) {
             eprintln!("tokm: cannot write budget failure: {error}");
             return ExitCode::FAILURE;
         }
