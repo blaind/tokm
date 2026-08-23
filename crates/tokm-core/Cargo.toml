@@ -33,8 +33,13 @@ tiktoken-rs = { workspace = true, optional = true }
 tokenizers = { workspace = true, optional = true }
 
 [dev-dependencies]
+criterion.workspace = true
 filetime = "0.2"
 tempfile.workspace = true
+
+[[bench]]
+name = "micro"
+harness = false
 
 [lints]
 workspace = true
