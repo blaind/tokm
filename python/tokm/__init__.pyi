@@ -154,6 +154,7 @@ def count(
     text: str,
     *,
     encoding: str | None = None,
+    model: str | None = None,
     tokenizer_file: str | PathLike[str] | None = None,
     normalize: bool = False,
 ) -> CountResult: ...
@@ -161,6 +162,7 @@ def count_file(
     path: str | PathLike[str],
     *,
     encoding: str | None = None,
+    model: str | None = None,
     tokenizer_file: str | PathLike[str] | None = None,
     normalize: bool = False,
     invalid_utf8: str = "skip",
@@ -171,6 +173,7 @@ def scan(
     paths: str | PathLike[str] | Sequence[str | PathLike[str]],
     *,
     encoding: str | None = None,
+    model: str | None = None,
     tokenizer_file: str | PathLike[str] | None = None,
     normalize: bool = False,
     invalid_utf8: str = "skip",
