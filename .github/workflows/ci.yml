@@ -34,6 +34,21 @@ jobs:
         with:
           arguments: --locked --workspace --all-features
 
+  msrv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: 1.88.0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: msrv
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo check --locked --workspace --all-features
+      - run: cargo check --locked --package tokm-core --no-default-features
+
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 15
