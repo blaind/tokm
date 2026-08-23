@@ -1,6 +1,13 @@
 //! Deterministic human and JSON reporting.
 
-use std::{cmp::Ordering, io, io::Write, num::NonZeroU64, path::Path};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    io,
+    io::Write,
+    num::NonZeroU64,
+    path::{Path, PathBuf},
+};
 
 use serde::Serialize;
 use tokm_core::{
@@ -35,6 +42,13 @@ fn write_scan_report(writer: &mut impl Write, result: &ScanResult, args: &Args) 
             let directories = aggregate_directories(&result.files, args.paths.clone())
                 .map_err(io::Error::other)?;
             write_directory_table(writer, &directories, &result.totals, args.sort)?;
+            write_skip_summary(writer, &result.skipped)?;
+            write_measurement_summaries(writer, result.totals.tokens, args)
+        }
+        OutputFormat::Table if args.tree => {
+            let directories = aggregate_directories(&result.files, args.paths.clone())
+                .map_err(io::Error::other)?;
+            write_directory_tree(writer, &directories)?;
             write_skip_summary(writer, &result.skipped)?;
             write_measurement_summaries(writer, result.totals.tokens, args)
         }
@@ -536,6 +550,100 @@ fn write_directory_table(
     )
 }
 
+fn write_directory_tree(
+    writer: &mut impl Write,
+    directories: &[DirectoryResult],
+) -> io::Result<()> {
+    if directories.is_empty() {
+        return writeln!(writer, " 0 (no measured directories)");
+    }
+
+    let paths = directories
+        .iter()
+        .map(|directory| directory.path.clone())
+        .collect::<BTreeSet<_>>();
+    let mut children: BTreeMap<PathBuf, Vec<&DirectoryResult>> = BTreeMap::new();
+    let mut roots = Vec::new();
+    for directory in directories {
+        match tree_parent(&directory.path).filter(|parent| paths.contains(parent)) {
+            Some(parent) => children.entry(parent).or_default().push(directory),
+            None => roots.push(directory),
+        }
+    }
+    roots.sort_by(|left, right| left.path.cmp(&right.path));
+    for siblings in children.values_mut() {
+        siblings.sort_by(|left, right| left.path.cmp(&right.path));
+    }
+
+    let tokens_width = directories
+        .iter()
+        .map(|directory| format_number(directory.tokens).len())
+        .max()
+        .unwrap_or(1);
+    for root in roots {
+        writeln!(
+            writer,
+            "{:>tokens_width$} {}",
+            format_number(root.tokens),
+            root.path.display(),
+        )?;
+        write_tree_children(writer, &root.path, &children, "", tokens_width)?;
+    }
+
+    Ok(())
+}
+
+fn write_tree_children(
+    writer: &mut impl Write,
+    parent: &Path,
+    children: &BTreeMap<PathBuf, Vec<&DirectoryResult>>,
+    prefix: &str,
+    tokens_width: usize,
+) -> io::Result<()> {
+    let Some(siblings) = children.get(parent) else {
+        return Ok(());
+    };
+
+    for (index, directory) in siblings.iter().enumerate() {
+        let last = index + 1 == siblings.len();
+        let connector = if last { "└── " } else { "├── " };
+        writeln!(
+            writer,
+            "{prefix}{connector}{:>tokens_width$} {}",
+            format_number(directory.tokens),
+            tree_label(&directory.path),
+        )?;
+        let child_prefix = format!("{prefix}{}", if last { "    " } else { "│   " });
+        write_tree_children(
+            writer,
+            &directory.path,
+            children,
+            &child_prefix,
+            tokens_width,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn tree_parent(path: &Path) -> Option<PathBuf> {
+    if path == Path::new(".") {
+        return None;
+    }
+    let parent = path.parent()?;
+    if parent.as_os_str().is_empty() {
+        Some(PathBuf::from("."))
+    } else {
+        Some(parent.to_path_buf())
+    }
+}
+
+fn tree_label(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
 fn compare_directories(
     left: &DirectoryResult,
     right: &DirectoryResult,
@@ -623,7 +731,7 @@ fn write_json(writer: &mut impl Write, result: &ScanResult, args: &Args) -> io::
                 .then(|| JsonDensity::new(language.tokens, language.bytes)),
         })
         .collect();
-    let directories = if args.dirs {
+    let directories = if args.dirs || args.tree {
         Some(
             aggregate_directories(&result.files, args.paths.clone())
                 .map_err(io::Error::other)?
