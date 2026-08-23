@@ -69,6 +69,13 @@ pub enum GitError {
         message: String,
     },
 
+    /// A worktree comparison was requested for a bare repository.
+    #[error("Git repository at {path} has no worktree")]
+    WorktreeUnavailable {
+        /// Discovered Git directory.
+        path: PathBuf,
+    },
+
     /// A revision expression could not be resolved to an object.
     #[error("cannot resolve Git revision {revision:?}: {message}")]
     Revision {
@@ -106,6 +113,10 @@ pub enum GitError {
     /// Aggregation of the committed tree failed.
     #[error(transparent)]
     Scan(#[from] ScanError),
+
+    /// The two measured snapshots were not comparable.
+    #[error(transparent)]
+    Diff(#[from] DiffError),
 }
 
 /// A recursive scan could not produce a trustworthy aggregate result.
