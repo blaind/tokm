@@ -53,8 +53,17 @@ pub(crate) struct Args {
     pub(crate) invalid_utf8: InvalidUtf8Arg,
 
     /// Show per-file results instead of language totals.
-    #[arg(long, global = true, help_heading = "Display")]
+    #[arg(long, global = true, conflicts_with = "dirs", help_heading = "Display")]
     pub(crate) files: bool,
+
+    /// Show recursive directory totals instead of language totals.
+    #[arg(
+        long,
+        global = true,
+        conflicts_with = "files",
+        help_heading = "Display"
+    )]
+    pub(crate) dirs: bool,
 
     /// Select the output format.
     #[arg(
@@ -337,6 +346,11 @@ mod tests {
     fn context_window_must_be_positive() {
         assert!(Args::try_parse_from(["tokm", "--context", "128000"]).is_ok());
         assert!(Args::try_parse_from(["tokm", "--context", "0"]).is_err());
+    }
+
+    #[test]
+    fn file_and_directory_views_are_mutually_exclusive() {
+        assert!(Args::try_parse_from(["tokm", "--files", "--dirs"]).is_err());
     }
 
     #[test]
