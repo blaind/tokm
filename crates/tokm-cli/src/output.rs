@@ -4,8 +4,9 @@ use std::{cmp::Ordering, io, io::Write, num::NonZeroU64, path::Path};
 
 use serde::Serialize;
 use tokm_core::{
-    DiffFileResult, DiffResult, InvalidUtf8Policy, Language, ScanFileResult, ScanResult,
-    ScanTotals, SkipDetail, SkippedSummary, TokenDelta, tokenizer::TokenizerMetadata,
+    DiffFileResult, DiffResult, DirectoryResult, InvalidUtf8Policy, Language, ScanFileResult,
+    ScanResult, ScanTotals, SkipDetail, SkippedSummary, TokenDelta, aggregate_directories,
+    tokenizer::TokenizerMetadata,
 };
 
 use crate::{
@@ -28,8 +29,15 @@ pub(crate) fn write_report(
 
 fn write_scan_report(writer: &mut impl Write, result: &ScanResult, args: &Args) -> io::Result<()> {
     match args.format {
-        OutputFormat::Json => write_json(writer, result, args.context),
+        OutputFormat::Json => write_json(writer, result, args),
         OutputFormat::Table if args.quiet => Ok(()),
+        OutputFormat::Table if args.dirs => {
+            let directories = aggregate_directories(&result.files, args.paths.clone())
+                .map_err(io::Error::other)?;
+            write_directory_table(writer, &directories, &result.totals, args.sort)?;
+            write_skip_summary(writer, &result.skipped)?;
+            write_context_summary(writer, result.totals.tokens, args.context)
+        }
         OutputFormat::Table if args.files => {
             write_file_table(writer, result, args.sort)?;
             write_context_summary(writer, result.totals.tokens, args.context)
@@ -371,6 +379,75 @@ fn write_file_table(
     write_skip_summary(writer, &result.skipped)
 }
 
+fn write_directory_table(
+    writer: &mut impl Write,
+    directories: &[DirectoryResult],
+    totals: &ScanTotals,
+    sort: SortField,
+) -> io::Result<()> {
+    let mut directories = directories.iter().collect::<Vec<_>>();
+    directories.sort_by(|left, right| compare_directories(left, right, sort));
+    let tokens_width = directories
+        .iter()
+        .map(|directory| format_number(directory.tokens).len())
+        .chain([format_number(totals.tokens).len()])
+        .max()
+        .unwrap_or(6)
+        .max("Tokens".len());
+    let files_width = directories
+        .iter()
+        .map(|directory| format_number(directory.files).len())
+        .chain([format_number(totals.files).len()])
+        .max()
+        .unwrap_or(5)
+        .max("Files".len());
+    let path_width = directories
+        .iter()
+        .map(|directory| directory.path.display().to_string().len())
+        .max()
+        .unwrap_or(9)
+        .max("Directory".len());
+    let table_width = tokens_width + files_width + path_width + 7;
+
+    writeln!(
+        writer,
+        " {:>tokens_width$}  {:>files_width$}  Directory",
+        "Tokens", "Files"
+    )?;
+    writeln!(writer, "{}", "-".repeat(table_width))?;
+    for directory in directories {
+        writeln!(
+            writer,
+            " {:>tokens_width$}  {:>files_width$}  {}",
+            format_number(directory.tokens),
+            format_number(directory.files),
+            directory.path.display(),
+        )?;
+    }
+    writeln!(writer, "{}", "-".repeat(table_width))?;
+    writeln!(
+        writer,
+        " {:>tokens_width$}  {:>files_width$}  Total",
+        format_number(totals.tokens),
+        format_number(totals.files),
+    )
+}
+
+fn compare_directories(
+    left: &DirectoryResult,
+    right: &DirectoryResult,
+    sort: SortField,
+) -> Ordering {
+    match sort {
+        SortField::Tokens => right
+            .tokens
+            .cmp(&left.tokens)
+            .then_with(|| left.path.cmp(&right.path)),
+        SortField::Path => left.path.cmp(&right.path),
+        SortField::Language => unreachable!("language sorting is rejected for directory output"),
+    }
+}
+
 fn compare_files(left: &ScanFileResult, right: &ScanFileResult, sort: SortField) -> Ordering {
     match sort {
         SortField::Tokens => right
@@ -418,11 +495,7 @@ fn skip_counts(skipped: &SkippedSummary) -> [(&'static str, u64); 7] {
     ]
 }
 
-fn write_json(
-    writer: &mut impl Write,
-    result: &ScanResult,
-    context: Option<NonZeroU64>,
-) -> io::Result<()> {
+fn write_json(writer: &mut impl Write, result: &ScanResult, args: &Args) -> io::Result<()> {
     let files = result
         .files
         .iter()
@@ -434,6 +507,22 @@ fn write_json(
             decoded_lossily: file.decoded_lossily,
         })
         .collect();
+    let directories = if args.dirs {
+        Some(
+            aggregate_directories(&result.files, args.paths.clone())
+                .map_err(io::Error::other)?
+                .into_iter()
+                .map(|directory| JsonDirectory {
+                    path: machine_path(&directory.path),
+                    files: directory.files,
+                    tokens: directory.tokens,
+                    bytes: directory.bytes,
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
     let report = JsonReport {
         schema_version: JSON_SCHEMA_VERSION,
         tokenizer: &result.tokenizer,
@@ -443,7 +532,10 @@ fn write_json(
             invalid_utf8: result.invalid_utf8,
         },
         totals: &result.totals,
-        context: context.map(|context| ContextComparison::new(result.totals.tokens, context)),
+        context: args
+            .context
+            .map(|context| ContextComparison::new(result.totals.tokens, context)),
+        directories,
         languages: &result.languages,
         files,
         skipped: json_skipped(&result.skipped),
@@ -579,6 +671,8 @@ struct JsonReport<'a> {
     totals: &'a ScanTotals,
     #[serde(skip_serializing_if = "Option::is_none")]
     context: Option<ContextComparison>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    directories: Option<Vec<JsonDirectory>>,
     languages: &'a [tokm_core::LanguageResult],
     files: Vec<JsonFile>,
     skipped: JsonSkipped,
@@ -652,6 +746,14 @@ struct JsonFile {
     tokens: u64,
     bytes: u64,
     decoded_lossily: bool,
+}
+
+#[derive(Serialize)]
+struct JsonDirectory {
+    path: String,
+    files: u64,
+    tokens: u64,
+    bytes: u64,
 }
 
 #[derive(Serialize)]

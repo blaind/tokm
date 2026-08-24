@@ -100,6 +100,38 @@ fn context_comparison_is_reported_in_human_and_json_output() {
 }
 
 #[test]
+fn directory_view_uses_recursive_rollups() {
+    let directory = tempdir().unwrap();
+    fs::create_dir(directory.path().join("src")).unwrap();
+    fs::write(directory.path().join("src/lib.rs"), "fn item() {}").unwrap();
+    fs::write(directory.path().join("README.md"), "project docs").unwrap();
+    let output = tokm()
+        .args(["--format", "json", "--dirs"])
+        .arg(directory.path())
+        .output()
+        .unwrap();
+    let json = parse_json(&output);
+    let directories = json["directories"].as_array().unwrap();
+    let root = directories
+        .iter()
+        .find(|entry| entry["path"] == directory.path().to_string_lossy().as_ref())
+        .unwrap();
+    let source = directories
+        .iter()
+        .find(|entry| entry["path"].as_str().unwrap().ends_with("/src"))
+        .unwrap();
+
+    assert_eq!(root["files"], 2);
+    assert_eq!(root["tokens"], json["totals"]["tokens"]);
+    assert_eq!(source["files"], 1);
+
+    let conflict = tokm().args(["--files", "--dirs"]).output().unwrap();
+    let stdin = run_stdin(&["--dirs", "-"], b"hello");
+    assert_eq!(conflict.status.code(), Some(2));
+    assert_eq!(stdin.status.code(), Some(2));
+}
+
+#[test]
 fn cli_and_core_match_both_exact_encodings() {
     let path = fixture("special_tokens").join("input.txt");
     let text = fs::read_to_string(&path).unwrap();

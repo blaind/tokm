@@ -12,6 +12,16 @@ use tokm_core::{
 use crate::args::{Args, Command, InputMode};
 
 pub(crate) fn execute(args: &Args) -> Result<Execution, CliError> {
+    if args.dirs && args.command.is_some() {
+        return Err(CliError::Usage(
+            "--dirs is not supported for Git diffs".to_owned(),
+        ));
+    }
+    if args.dirs && args.sort == crate::args::SortField::Language {
+        return Err(CliError::Usage(
+            "--sort language is not available with --dirs".to_owned(),
+        ));
+    }
     let options = args
         .scan_options()
         .map_err(|error| CliError::Operational(error.to_string()))?;
@@ -49,6 +59,11 @@ pub(crate) struct DiffExecution {
 
 fn execute_scan(args: &Args, options: &ScanOptions) -> Result<Execution, CliError> {
     let input = args.input_mode().map_err(CliError::Usage)?;
+    if args.dirs && input == InputMode::Stdin {
+        return Err(CliError::Usage(
+            "--dirs requires filesystem input".to_owned(),
+        ));
+    }
 
     match input {
         InputMode::Filesystem(paths) => scan(paths, options)
