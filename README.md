@@ -75,6 +75,18 @@ tokm . --hidden --no-ignore
 tokm . --follow
 ```
 
+Show recursive directory rollups instead of language totals:
+
+```console
+tokm . --dirs
+tokm . --dirs --sort path
+tokm . --dirs --format json
+```
+
+Each directory includes every measured file beneath it. Overlapping input roots still count each
+logical file once. `--dirs` is a filesystem view and cannot be combined with stdin, Git diff,
+`--files`, or `--sort language`.
+
 Files larger than 20 MiB are skipped visibly. The limit accepts binary K/M/G suffixes.
 
 ```console
