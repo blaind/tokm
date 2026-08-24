@@ -22,6 +22,11 @@ pub(crate) fn execute(args: &Args) -> Result<Execution, CliError> {
             "--density is not supported for Git diffs".to_owned(),
         ));
     }
+    if args.tree && args.command.is_some() {
+        return Err(CliError::Usage(
+            "--tree is not supported for Git diffs".to_owned(),
+        ));
+    }
     if args.dirs && args.sort == crate::args::SortField::Language {
         return Err(CliError::Usage(
             "--sort language is not available with --dirs".to_owned(),
@@ -64,10 +69,9 @@ pub(crate) struct DiffExecution {
 
 fn execute_scan(args: &Args, options: &ScanOptions) -> Result<Execution, CliError> {
     let input = args.input_mode().map_err(CliError::Usage)?;
-    if args.dirs && input == InputMode::Stdin {
-        return Err(CliError::Usage(
-            "--dirs requires filesystem input".to_owned(),
-        ));
+    if (args.dirs || args.tree) && input == InputMode::Stdin {
+        let view = if args.dirs { "--dirs" } else { "--tree" };
+        return Err(CliError::Usage(format!("{view} requires filesystem input")));
     }
 
     match input {

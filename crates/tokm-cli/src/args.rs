@@ -56,7 +56,7 @@ pub(crate) struct Args {
     #[arg(
         long,
         global = true,
-        conflicts_with_all = ["dirs", "density"],
+        conflicts_with_all = ["dirs", "density", "tree"],
         help_heading = "Display"
     )]
     pub(crate) files: bool,
@@ -65,7 +65,7 @@ pub(crate) struct Args {
     #[arg(
         long,
         global = true,
-        conflicts_with_all = ["files", "density"],
+        conflicts_with_all = ["files", "density", "tree"],
         help_heading = "Display"
     )]
     pub(crate) dirs: bool,
@@ -74,10 +74,19 @@ pub(crate) struct Args {
     #[arg(
         long,
         global = true,
-        conflicts_with_all = ["files", "dirs"],
+        conflicts_with_all = ["files", "dirs", "tree"],
         help_heading = "Display"
     )]
     pub(crate) density: bool,
+
+    /// Show recursive directory totals as a tree.
+    #[arg(
+        long,
+        global = true,
+        conflicts_with_all = ["files", "dirs", "density", "sort"],
+        help_heading = "Display"
+    )]
+    pub(crate) tree: bool,
 
     /// Select the output format.
     #[arg(
@@ -430,6 +439,10 @@ mod tests {
         assert!(Args::try_parse_from(["tokm", "--files", "--dirs"]).is_err());
         assert!(Args::try_parse_from(["tokm", "--files", "--density"]).is_err());
         assert!(Args::try_parse_from(["tokm", "--dirs", "--density"]).is_err());
+        assert!(Args::try_parse_from(["tokm", "--files", "--tree"]).is_err());
+        assert!(Args::try_parse_from(["tokm", "--dirs", "--tree"]).is_err());
+        assert!(Args::try_parse_from(["tokm", "--density", "--tree"]).is_err());
+        assert!(Args::try_parse_from(["tokm", "--tree", "--sort", "path"]).is_err());
     }
 
     #[test]
