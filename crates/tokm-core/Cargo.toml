@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "Token measurement engine for tokm"
+documentation = "https://docs.rs/tokm-core"
+homepage = "https://crates.io/crates/tokm-core"
+keywords = ["tokenizer", "tokens", "measurement"]
+categories = ["development-tools", "text-processing"]
 
 [features]
 default = ["builtin-tokenizers", "cache"]
