@@ -10,6 +10,7 @@ license = "MIT"
 
 [workspace.dependencies]
 blake3 = "1.8"
+clap = { version = "4.6", features = ["derive"] }
 directories = "6"
 fs2 = "0.4"
 globset = "0.4.20"
