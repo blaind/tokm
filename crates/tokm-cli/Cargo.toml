@@ -1,0 +1,17 @@
+[package]
+name = "tokm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Fast local token measurement for text and files"
+readme = "../../README.md"
+keywords = ["tokenizer", "tokens", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+homepage = "https://crates.io/crates/tokm"
+
+[dependencies]
+tokm-core.workspace = true
+
+[lints]
+workspace = true
