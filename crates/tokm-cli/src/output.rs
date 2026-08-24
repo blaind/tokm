@@ -42,6 +42,10 @@ fn write_scan_report(writer: &mut impl Write, result: &ScanResult, args: &Args) 
             write_file_table(writer, result, args.sort)?;
             write_measurement_summaries(writer, result.totals.tokens, args)
         }
+        OutputFormat::Table if args.density => {
+            write_density_table(writer, result)?;
+            write_measurement_summaries(writer, result.totals.tokens, args)
+        }
         OutputFormat::Table => {
             write_language_table(writer, result)?;
             write_measurement_summaries(writer, result.totals.tokens, args)
@@ -361,6 +365,69 @@ fn write_language_table(writer: &mut impl Write, result: &ScanResult) -> io::Res
     write_skip_summary(writer, &result.skipped)
 }
 
+fn write_density_table(writer: &mut impl Write, result: &ScanResult) -> io::Result<()> {
+    let language_width = result
+        .languages
+        .iter()
+        .map(|language| language.name.as_str().len())
+        .max()
+        .unwrap_or(8)
+        .max("Language".len());
+    let files_width = result
+        .languages
+        .iter()
+        .map(|language| format_number(language.files).len())
+        .chain([format_number(result.totals.files).len()])
+        .max()
+        .unwrap_or(5)
+        .max("Files".len());
+    let tokens_width = result
+        .languages
+        .iter()
+        .map(|language| format_number(language.tokens).len())
+        .chain([format_number(result.totals.tokens).len()])
+        .max()
+        .unwrap_or(6)
+        .max("Tokens".len());
+    let table_width = language_width + files_width + tokens_width + 30;
+
+    writeln!(
+        writer,
+        " {:<language_width$}  {:>files_width$}  {:>tokens_width$}  {:>9}  {:>11}",
+        "Language", "Files", "Tokens", "Tokens/KB", "Bytes/Token"
+    )?;
+    writeln!(writer, "{}", "-".repeat(table_width))?;
+    for language in &result.languages {
+        writeln!(
+            writer,
+            " {:<language_width$}  {:>files_width$}  {:>tokens_width$}  {:>9}  {:>11}",
+            language.name.as_str(),
+            format_number(language.files),
+            format_number(language.tokens),
+            format_decimal_tenths(tokens_per_kb_tenths(language.tokens, language.bytes)),
+            format_decimal_tenths(bytes_per_token_tenths(language.bytes, language.tokens)),
+        )?;
+    }
+    writeln!(writer, "{}", "-".repeat(table_width))?;
+    writeln!(
+        writer,
+        " {:<language_width$}  {:>files_width$}  {:>tokens_width$}  {:>9}  {:>11}",
+        "Total",
+        format_number(result.totals.files),
+        format_number(result.totals.tokens),
+        format_decimal_tenths(tokens_per_kb_tenths(
+            result.totals.tokens,
+            result.totals.bytes,
+        )),
+        format_decimal_tenths(bytes_per_token_tenths(
+            result.totals.bytes,
+            result.totals.tokens,
+        )),
+    )?;
+
+    write_skip_summary(writer, &result.skipped)
+}
+
 fn write_file_table(
     writer: &mut impl Write,
     result: &ScanResult,
@@ -543,6 +610,19 @@ fn write_json(writer: &mut impl Write, result: &ScanResult, args: &Args) -> io::
             decoded_lossily: file.decoded_lossily,
         })
         .collect();
+    let languages = result
+        .languages
+        .iter()
+        .map(|language| JsonLanguage {
+            name: language.name,
+            files: language.files,
+            tokens: language.tokens,
+            bytes: language.bytes,
+            density: args
+                .density
+                .then(|| JsonDensity::new(language.tokens, language.bytes)),
+        })
+        .collect();
     let directories = if args.dirs {
         Some(
             aggregate_directories(&result.files, args.paths.clone())
@@ -575,7 +655,7 @@ fn write_json(writer: &mut impl Write, result: &ScanResult, args: &Args) -> io::
             .price_input
             .map(|price| JsonCostEstimate::new(result.totals.tokens, price)),
         directories,
-        languages: &result.languages,
+        languages,
         files,
         skipped: json_skipped(&result.skipped),
     };
@@ -675,6 +755,26 @@ fn format_number(value: u64) -> String {
     format_unsigned(u128::from(value))
 }
 
+fn tokens_per_kb_tenths(tokens: u64, bytes: u64) -> u128 {
+    rounded_ratio_tenths(u128::from(tokens) * 1024, u128::from(bytes))
+}
+
+fn bytes_per_token_tenths(bytes: u64, tokens: u64) -> u128 {
+    rounded_ratio_tenths(u128::from(bytes), u128::from(tokens))
+}
+
+fn rounded_ratio_tenths(numerator: u128, denominator: u128) -> u128 {
+    if denominator == 0 {
+        return 0;
+    }
+
+    (numerator * 10 + denominator / 2) / denominator
+}
+
+fn format_decimal_tenths(value: u128) -> String {
+    format!("{}.{:01}", value / 10, value % 10)
+}
+
 fn format_signed(value: i128) -> String {
     let sign = if value < 0 { '-' } else { '+' };
     format!("{sign}{}", format_unsigned(value.unsigned_abs()))
@@ -744,7 +844,7 @@ struct JsonReport<'a> {
     cost: Option<JsonCostEstimate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     directories: Option<Vec<JsonDirectory>>,
-    languages: &'a [tokm_core::LanguageResult],
+    languages: Vec<JsonLanguage>,
     files: Vec<JsonFile>,
     skipped: JsonSkipped,
 }
@@ -858,6 +958,31 @@ struct JsonFile {
 }
 
 #[derive(Serialize)]
+struct JsonLanguage {
+    name: Language,
+    files: u64,
+    tokens: u64,
+    bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    density: Option<JsonDensity>,
+}
+
+#[derive(Serialize)]
+struct JsonDensity {
+    tokens_per_kb: f64,
+    bytes_per_token: f64,
+}
+
+impl JsonDensity {
+    fn new(tokens: u64, bytes: u64) -> Self {
+        Self {
+            tokens_per_kb: tokens_per_kb_tenths(tokens, bytes) as f64 / 10.0,
+            bytes_per_token: bytes_per_token_tenths(bytes, tokens) as f64 / 10.0,
+        }
+    }
+}
+
+#[derive(Serialize)]
 struct JsonDirectory {
     path: String,
     files: u64,
@@ -910,8 +1035,9 @@ mod tests {
     use std::num::NonZeroU64;
 
     use super::{
-        ContextComparison, CostEstimate, allocated_percent_tenths, format_estimated_cost,
-        format_input_price, format_number, format_signed,
+        ContextComparison, CostEstimate, allocated_percent_tenths, bytes_per_token_tenths,
+        format_estimated_cost, format_input_price, format_number, format_signed,
+        tokens_per_kb_tenths,
     };
     use crate::args::InputPrice;
 
@@ -929,6 +1055,14 @@ mod tests {
         assert_eq!(format_number(135_641), "135,641");
         assert_eq!(format_signed(12_402), "+12,402");
         assert_eq!(format_signed(-6_029), "-6,029");
+    }
+
+    #[test]
+    fn density_metrics_use_deterministic_tenth_rounding() {
+        assert_eq!(tokens_per_kb_tenths(2, 11), 1_862);
+        assert_eq!(bytes_per_token_tenths(11, 2), 55);
+        assert_eq!(tokens_per_kb_tenths(0, 0), 0);
+        assert_eq!(bytes_per_token_tenths(0, 0), 0);
     }
 
     #[test]

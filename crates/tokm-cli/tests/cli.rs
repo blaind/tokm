@@ -118,6 +118,25 @@ fn explicit_input_price_is_reported_without_floating_point_money() {
 }
 
 #[test]
+fn density_view_is_reported_in_human_and_json_output() {
+    let human = run_stdin(&["--density", "-"], b"hello world");
+    let json_output = run_stdin(&["--format", "json", "--density", "-"], b"hello world");
+    let json = parse_json(&json_output);
+
+    assert!(human.status.success());
+    let stdout = String::from_utf8_lossy(&human.stdout);
+    assert!(stdout.contains("Tokens/KB"));
+    assert!(stdout.contains("Bytes/Token"));
+    assert!(stdout.contains("186.2"));
+    assert!(stdout.contains("5.5"));
+    assert_eq!(json["languages"][0]["density"]["tokens_per_kb"], 186.2);
+    assert_eq!(json["languages"][0]["density"]["bytes_per_token"], 5.5);
+
+    let conflict = tokm().args(["--files", "--density"]).output().unwrap();
+    assert_eq!(conflict.status.code(), Some(2));
+}
+
+#[test]
 fn directory_view_uses_recursive_rollups() {
     let directory = tempdir().unwrap();
     fs::create_dir(directory.path().join("src")).unwrap();
