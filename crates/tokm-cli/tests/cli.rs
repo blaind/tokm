@@ -83,6 +83,23 @@ fn json_scan_is_deterministic_complete_and_diagnostic_free() {
 }
 
 #[test]
+fn context_comparison_is_reported_in_human_and_json_output() {
+    let human = run_stdin(&["--context", "10", "-"], b"hello world");
+    let json_output = run_stdin(&["--format", "json", "--context", "1", "-"], b"hello world");
+    let json = parse_json(&json_output);
+
+    assert!(human.status.success());
+    let stdout = String::from_utf8_lossy(&human.stdout);
+    assert!(stdout.contains("Context window:  10"));
+    assert!(stdout.contains("Utilization:     20.0%"));
+    assert!(stdout.contains("Remaining:       8"));
+    assert_eq!(json["context"]["window_tokens"], 1);
+    assert_eq!(json["context"]["utilization_percent"], 200.0);
+    assert_eq!(json["context"]["remaining_tokens"], 0);
+    assert_eq!(json["context"]["exceeded_by_tokens"], 1);
+}
+
+#[test]
 fn cli_and_core_match_both_exact_encodings() {
     let path = fixture("special_tokens").join("input.txt");
     let text = fs::read_to_string(&path).unwrap();
