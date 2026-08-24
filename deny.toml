@@ -5,6 +5,7 @@ unsound = "all"
 [bans]
 multiple-versions = "deny"
 wildcards = "deny"
+skip = [{ name = "syn", version = "2" }]
 
 [licenses]
 confidence-threshold = 0.93
