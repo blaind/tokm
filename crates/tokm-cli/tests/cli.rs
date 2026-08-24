@@ -100,6 +100,24 @@ fn context_comparison_is_reported_in_human_and_json_output() {
 }
 
 #[test]
+fn explicit_input_price_is_reported_without_floating_point_money() {
+    let human = run_stdin(&["--price-input", "500000", "-"], b"hello world");
+    let json_output = run_stdin(
+        &["--format", "json", "--price-input", "500000", "-"],
+        b"hello world",
+    );
+    let json = parse_json(&json_output);
+
+    assert!(human.status.success());
+    let stdout = String::from_utf8_lossy(&human.stdout);
+    assert!(stdout.contains("Price:           $500,000 / 1M tokens"));
+    assert!(stdout.contains("Estimated cost:  $1.0000"));
+    assert_eq!(json["cost"]["currency"], "USD");
+    assert_eq!(json["cost"]["price_per_million_tokens"], "500000");
+    assert_eq!(json["cost"]["estimated_input_cost"], "1.0000");
+}
+
+#[test]
 fn directory_view_uses_recursive_rollups() {
     let directory = tempdir().unwrap();
     fs::create_dir(directory.path().join("src")).unwrap();
