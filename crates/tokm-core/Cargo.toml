@@ -45,5 +45,10 @@ harness = false
 name = "scan_workloads"
 harness = false
 
+[[bench]]
+name = "git_diff_workload"
+harness = false
+required-features = ["git"]
+
 [lints]
 workspace = true
