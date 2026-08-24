@@ -50,6 +50,7 @@ struct CountEntry {
     key: String,
     tokens: u64,
     decoded_lossily: bool,
+    integrity: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -60,6 +61,7 @@ struct MetadataEntry {
     modified_nanos: u64,
     checkpoint_nanos: u64,
     content_hash: String,
+    integrity: String,
 }
 
 impl Cache {
@@ -112,21 +114,20 @@ impl Cache {
         let Some(checkpoint_nanos) = system_time_nanos(SystemTime::now()) else {
             return;
         };
-        let entry = MetadataEntry {
-            format_version: CACHE_FORMAT_VERSION,
-            path_fingerprint: path_fingerprint.clone(),
-            size: snapshot.size,
+        let entry = MetadataEntry::new(
+            path_fingerprint.clone(),
+            snapshot.size,
             modified_nanos,
             checkpoint_nanos,
-            content_hash: content_hash.to_owned(),
-        };
+            content_hash.to_owned(),
+        );
         let path = self.metadata_path(&path_fingerprint);
         let lock_path = path.with_extension("lock");
 
         let _ = with_exclusive_lock(&lock_path, || {
-            if read_json::<MetadataEntry>(&path)
-                .is_some_and(|current| current.checkpoint_nanos > checkpoint_nanos)
-            {
+            if read_json::<MetadataEntry>(&path).is_some_and(|current| {
+                current.is_intact() && current.checkpoint_nanos > checkpoint_nanos
+            }) {
                 return Ok(());
             }
 
@@ -142,7 +143,7 @@ impl Cache {
     ) -> Option<CachedCount> {
         let key = count_key(content_hash, options, invalid_utf8);
         let entry: CountEntry = read_json(&self.count_path(&key))?;
-        if entry.format_version != CACHE_FORMAT_VERSION || entry.key != key {
+        if !entry.is_valid_for(&key) {
             return None;
         }
 
@@ -162,17 +163,10 @@ impl Cache {
         let key = count_key(content_hash, options, invalid_utf8);
         let path = self.count_path(&key);
         let lock_path = path.with_extension("lock");
-        let entry = CountEntry {
-            format_version: CACHE_FORMAT_VERSION,
-            key: key.clone(),
-            tokens: count.tokens,
-            decoded_lossily: count.decoded_lossily,
-        };
+        let entry = CountEntry::new(key.clone(), count);
 
         let _ = with_exclusive_lock(&lock_path, || {
-            if read_json::<CountEntry>(&path).is_some_and(|current| {
-                current.format_version == CACHE_FORMAT_VERSION && current.key == key
-            }) {
+            if read_json::<CountEntry>(&path).is_some_and(|current| current.is_valid_for(&key)) {
                 return Ok(());
             }
 
@@ -197,13 +191,69 @@ impl Cache {
     }
 }
 
+impl CountEntry {
+    fn new(key: String, count: CachedCount) -> Self {
+        let integrity = count_entry_integrity(&key, count.tokens, count.decoded_lossily);
+        Self {
+            format_version: CACHE_FORMAT_VERSION,
+            key,
+            tokens: count.tokens,
+            decoded_lossily: count.decoded_lossily,
+            integrity,
+        }
+    }
+
+    fn is_valid_for(&self, key: &str) -> bool {
+        self.format_version == CACHE_FORMAT_VERSION
+            && self.key == key
+            && self.integrity == count_entry_integrity(&self.key, self.tokens, self.decoded_lossily)
+    }
+}
+
 impl MetadataEntry {
+    fn new(
+        path_fingerprint: String,
+        size: u64,
+        modified_nanos: u64,
+        checkpoint_nanos: u64,
+        content_hash: String,
+    ) -> Self {
+        let integrity = metadata_entry_integrity(
+            &path_fingerprint,
+            size,
+            modified_nanos,
+            checkpoint_nanos,
+            &content_hash,
+        );
+        Self {
+            format_version: CACHE_FORMAT_VERSION,
+            path_fingerprint,
+            size,
+            modified_nanos,
+            checkpoint_nanos,
+            content_hash,
+            integrity,
+        }
+    }
+
+    fn is_intact(&self) -> bool {
+        self.format_version == CACHE_FORMAT_VERSION
+            && self.integrity
+                == metadata_entry_integrity(
+                    &self.path_fingerprint,
+                    self.size,
+                    self.modified_nanos,
+                    self.checkpoint_nanos,
+                    &self.content_hash,
+                )
+    }
+
     fn is_usable(&self, path_fingerprint: &str, snapshot: MetadataSnapshot) -> bool {
         let Some(modified_nanos) = snapshot.modified_nanos else {
             return false;
         };
 
-        self.format_version == CACHE_FORMAT_VERSION
+        self.is_intact()
             && self.path_fingerprint == path_fingerprint
             && self.size == snapshot.size
             && self.modified_nanos == modified_nanos
@@ -211,6 +261,32 @@ impl MetadataEntry {
                 .checked_add(RACY_MTIME_WINDOW_NANOS)
                 .is_some_and(|safe_before| safe_before < self.checkpoint_nanos)
     }
+}
+
+fn count_entry_integrity(key: &str, tokens: u64, decoded_lossily: bool) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hash_component(&mut hasher, b"tokm-cache-count-entry-v1");
+    hash_component(&mut hasher, key.as_bytes());
+    hash_component(&mut hasher, &tokens.to_le_bytes());
+    hash_component(&mut hasher, &[u8::from(decoded_lossily)]);
+    hasher.finalize().to_hex().to_string()
+}
+
+fn metadata_entry_integrity(
+    path_fingerprint: &str,
+    size: u64,
+    modified_nanos: u64,
+    checkpoint_nanos: u64,
+    content_hash: &str,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hash_component(&mut hasher, b"tokm-cache-metadata-entry-v1");
+    hash_component(&mut hasher, path_fingerprint.as_bytes());
+    hash_component(&mut hasher, &size.to_le_bytes());
+    hash_component(&mut hasher, &modified_nanos.to_le_bytes());
+    hash_component(&mut hasher, &checkpoint_nanos.to_le_bytes());
+    hash_component(&mut hasher, content_hash.as_bytes());
+    hasher.finalize().to_hex().to_string()
 }
 
 fn count_key(
@@ -349,8 +425,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        CACHE_FORMAT_VERSION, Cache, CachedCount, MetadataEntry, MetadataSnapshot,
-        RACY_MTIME_WINDOW_NANOS, count_key,
+        Cache, CachedCount, CountEntry, MetadataEntry, MetadataSnapshot, RACY_MTIME_WINDOW_NANOS,
+        count_key, write_json_atomic,
     };
     use crate::{CountOptions, InvalidUtf8Policy, TextPolicy, tokenizer::BuiltinEncoding};
 
@@ -360,19 +436,28 @@ mod tests {
             size: 4,
             modified_nanos: Some(10),
         };
-        let mut entry = MetadataEntry {
-            format_version: CACHE_FORMAT_VERSION,
-            path_fingerprint: "path".to_owned(),
-            size: 4,
-            modified_nanos: 10,
-            checkpoint_nanos: 10 + RACY_MTIME_WINDOW_NANOS,
-            content_hash: "content".to_owned(),
-        };
+        let entry = MetadataEntry::new(
+            "path".to_owned(),
+            4,
+            10,
+            10 + RACY_MTIME_WINDOW_NANOS,
+            "content".to_owned(),
+        );
 
         assert!(!entry.is_usable("path", snapshot));
 
-        entry.checkpoint_nanos += 1;
-        assert!(entry.is_usable("path", snapshot));
+        let safe_entry = MetadataEntry::new(
+            "path".to_owned(),
+            4,
+            10,
+            11 + RACY_MTIME_WINDOW_NANOS,
+            "content".to_owned(),
+        );
+        assert!(safe_entry.is_usable("path", snapshot));
+
+        let mut corrupt_entry = safe_entry;
+        corrupt_entry.content_hash = "different".to_owned();
+        assert!(!corrupt_entry.is_usable("path", snapshot));
     }
 
     #[test]
@@ -456,7 +541,15 @@ mod tests {
         let key = count_key(&content_hash, &options, InvalidUtf8Policy::Skip);
         let path = cache.count_path(&key);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "not JSON").unwrap();
+        let mut corrupt = CountEntry::new(
+            key,
+            CachedCount {
+                tokens: 7,
+                decoded_lossily: false,
+            },
+        );
+        corrupt.tokens = 99;
+        write_json_atomic(&path, &corrupt).unwrap();
 
         assert_eq!(
             cache.lookup_count(&content_hash, &options, InvalidUtf8Policy::Skip),
