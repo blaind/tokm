@@ -34,10 +34,21 @@ The default tokenizer is exact local `o200k_base` ordinary encoding. It is a ver
 default and does not recognize special-token-looking strings as control instructions.
 
 ```console
+tokm . --model gpt-5
 tokm . --encoding cl100k_base
 tokm . --normalize
 tokm . --invalid-utf8 lossy
 ```
+
+Model names are aliases for a resolved built-in encoding:
+
+| Model family | Encoding |
+| --- | --- |
+| `gpt-5*`, `gpt-4.1`, `gpt-4.1-*`, `gpt-4o`, `gpt-4o-*` | `o200k_base` |
+| `gpt-4`, `gpt-4-*`, `gpt-3.5-turbo`, `gpt-3.5-turbo-*` | `cl100k_base` |
+
+Results and cache keys identify the resolved encoding, not the model alias. This keeps identical
+tokenizer definitions semantically identical even when selected through different model names.
 
 Load a Hugging Face tokenizer entirely from a local artifact:
 
@@ -45,10 +56,11 @@ Load a Hugging Face tokenizer entirely from a local artifact:
 tokm . --tokenizer-file ./tokenizer.json
 ```
 
-`--encoding` and `--tokenizer-file` are mutually exclusive. Artifact identity is a BLAKE3 hash of
-the actual file contents, not its path or timestamp. Raw-text measurement follows the artifact's
-normalization, pre-tokenization, model, and added-token matching. It disables automatic framing,
-truncation, and padding so the complete supplied text is measured without BOS/EOS insertion.
+`--model`, `--encoding`, and `--tokenizer-file` are mutually exclusive. Artifact identity is a
+BLAKE3 hash of the actual file contents, not its path or timestamp. Raw-text measurement follows
+the artifact's normalization, pre-tokenization, model, and added-token matching. It disables
+automatic framing, truncation, and padding so the complete supplied text is measured without
+BOS/EOS insertion.
 
 Decoded text is literal by default. `--normalize` removes one leading UTF-8 BOM, converts CRLF to
 LF, and converts standalone CR to LF. Invalid UTF-8 is skipped by default; lossy mode applies Rust
@@ -142,6 +154,7 @@ assert count.tokens == 2
 
 file = tokm.count_file("README.md")
 result = tokm.scan(["src", "tests"], encoding="o200k_base")
+model = tokm.scan(".", model="gpt-5")
 local = tokm.count("hello world", tokenizer_file="./tokenizer.json")
 
 print(file.tokens)
