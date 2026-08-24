@@ -21,15 +21,19 @@ pub(crate) struct Args {
     pub(crate) paths: Vec<PathBuf>,
 
     /// Select a built-in exact encoding (default: o200k_base).
-    #[arg(long, global = true, value_parser = parse_encoding, conflicts_with = "tokenizer_file", help_heading = "Tokenizer")]
+    #[arg(long, global = true, value_parser = parse_encoding, conflicts_with_all = ["model", "tokenizer_file"], help_heading = "Tokenizer")]
     pub(crate) encoding: Option<BuiltinEncoding>,
+
+    /// Resolve a supported model alias to a built-in encoding.
+    #[arg(long, global = true, value_parser = parse_model, conflicts_with_all = ["encoding", "tokenizer_file"], help_heading = "Tokenizer")]
+    pub(crate) model: Option<String>,
 
     /// Load a local Hugging Face tokenizer.json artifact.
     #[arg(
         long,
         global = true,
         value_name = "PATH",
-        conflicts_with = "encoding",
+        conflicts_with_all = ["encoding", "model"],
         help_heading = "Tokenizer"
     )]
     pub(crate) tokenizer_file: Option<PathBuf>,
@@ -171,9 +175,11 @@ impl Args {
         } else {
             TextPolicy::Literal
         };
-        let count = match &self.tokenizer_file {
-            Some(path) => CountOptions::for_tokenizer_file(path)?,
-            None => CountOptions::for_encoding(self.encoding.unwrap_or_default()),
+        let count = match (&self.tokenizer_file, &self.model, self.encoding) {
+            (Some(path), None, None) => CountOptions::for_tokenizer_file(path)?,
+            (None, Some(model), None) => CountOptions::for_model(model)?,
+            (None, None, encoding) => CountOptions::for_encoding(encoding.unwrap_or_default()),
+            _ => unreachable!("clap enforces mutually exclusive tokenizer selectors"),
         }
         .with_text_policy(text_policy);
         let mut options = ScanOptions::new(count)
@@ -241,6 +247,12 @@ fn parse_encoding(value: &str) -> Result<BuiltinEncoding, String> {
         .map_err(|error| error.to_string())
 }
 
+fn parse_model(value: &str) -> Result<String, String> {
+    BuiltinEncoding::for_model(value)
+        .map(|_| value.to_owned())
+        .map_err(|error| error.to_string())
+}
+
 fn parse_file_size(value: &str) -> Result<MaxFileSize, String> {
     if value.eq_ignore_ascii_case("unlimited") {
         return Ok(MaxFileSize::Unlimited);
@@ -286,6 +298,7 @@ mod tests {
 
         assert_eq!(args.paths, [std::path::PathBuf::from(".")]);
         assert_eq!(args.encoding, None);
+        assert_eq!(args.model, None);
         assert_eq!(
             options.count_options().tokenizer().metadata().name,
             BuiltinEncoding::O200kBase.as_str()
@@ -318,15 +331,35 @@ mod tests {
 
     #[test]
     fn tokenizer_selectors_are_mutually_exclusive() {
-        let result = Args::try_parse_from([
-            "tokm",
-            "--encoding",
-            "cl100k_base",
-            "--tokenizer-file",
-            "tokenizer.json",
-        ]);
+        let pairs = [
+            ["--encoding", "cl100k_base", "--model", "gpt-5"],
+            [
+                "--encoding",
+                "cl100k_base",
+                "--tokenizer-file",
+                "tokenizer.json",
+            ],
+            ["--model", "gpt-5", "--tokenizer-file", "tokenizer.json"],
+        ];
 
-        assert!(result.is_err());
+        for arguments in pairs {
+            assert!(
+                Args::try_parse_from(std::iter::once("tokm").chain(arguments.into_iter())).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn model_alias_resolves_through_core() {
+        let args = Args::try_parse_from(["tokm", "--model", "gpt-5"]).unwrap();
+        let options = args.scan_options().unwrap();
+
+        assert_eq!(args.model.as_deref(), Some("gpt-5"));
+        assert_eq!(
+            options.count_options().tokenizer().metadata().name,
+            BuiltinEncoding::O200kBase.as_str()
+        );
+        assert!(Args::try_parse_from(["tokm", "--model", "unknown"]).is_err());
     }
 
     #[test]

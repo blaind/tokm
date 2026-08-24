@@ -103,6 +103,26 @@ fn cli_and_core_match_both_exact_encodings() {
 }
 
 #[test]
+fn model_alias_reports_the_resolved_encoding_identity() {
+    let path = fixture("special_tokens").join("input.txt");
+    let text = fs::read_to_string(&path).unwrap();
+    let output = tokm()
+        .args(["--format", "json", "--model", "gpt-5"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    let json = parse_json(&output);
+    let expected = count_text(&text, &CountOptions::default()).unwrap();
+
+    assert_eq!(json["totals"]["tokens"], expected.tokens);
+    assert_eq!(json["tokenizer"]["name"], "o200k_base");
+    assert_eq!(
+        json["tokenizer"]["fingerprint"],
+        expected.tokenizer.fingerprint
+    );
+}
+
+#[test]
 fn local_tokenizer_file_uses_artifact_semantics_and_metadata() {
     let tokenizer = fixture("hf_tokenizer").join("tokenizer.json");
     let output = run_stdin(
@@ -144,6 +164,15 @@ fn tokenizer_selector_conflict_is_a_usage_error() {
 
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn unsupported_model_is_a_usage_error() {
+    let output = tokm().args(["--model", "unknown"]).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unsupported model"));
 }
 
 #[test]
