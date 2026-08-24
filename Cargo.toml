@@ -9,6 +9,9 @@ rust-version = "1.85"
 license = "MIT"
 
 [workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tiktoken-rs = "=0.12.0"
 tokm-core = { version = "0.1.0", path = "crates/tokm-core" }
 
 [workspace.lints.rust]
