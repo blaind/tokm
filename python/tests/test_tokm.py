@@ -17,6 +17,15 @@ def test_count_exposes_exact_semantics() -> None:
     assert result.text_policy.mode == "literal"
 
 
+def test_model_alias_uses_resolved_encoding_identity() -> None:
+    default = tokm.count("hello world")
+    aliased = tokm.count("hello world", model="gpt-5")
+
+    assert aliased.tokens == default.tokens
+    assert aliased.tokenizer.name == "o200k_base"
+    assert aliased.tokenizer.fingerprint == default.tokenizer.fingerprint
+
+
 def test_count_file_reports_per_file_skips(tmp_path: Path) -> None:
     valid = tmp_path / "valid.rs"
     invalid = tmp_path / "invalid.txt"
@@ -58,6 +67,9 @@ def test_invalid_configuration_has_typed_errors(tmp_path: Path) -> None:
     with pytest.raises(tokm.TokenizerError, match="unsupported encoding"):
         tokm.count("text", encoding="missing")
 
+    with pytest.raises(tokm.TokenizerError, match="unsupported model"):
+        tokm.count("text", model="missing")
+
     with pytest.raises(tokm.ConfigurationError, match="invalid_utf8"):
         tokm.scan(tmp_path, invalid_utf8="replace")
 
@@ -70,6 +82,12 @@ def test_invalid_configuration_has_typed_errors(tmp_path: Path) -> None:
             encoding="o200k_base",
             tokenizer_file=tmp_path / "tokenizer.json",
         )
+
+    with pytest.raises(tokm.ConfigurationError, match="mutually exclusive"):
+        tokm.count("text", encoding="o200k_base", model="gpt-5")
+
+    with pytest.raises(tokm.ConfigurationError, match="mutually exclusive"):
+        tokm.count("text", model="gpt-5", tokenizer_file=tmp_path / "tokenizer.json")
 
 
 def test_missing_scan_input_is_an_input_error(tmp_path: Path) -> None:

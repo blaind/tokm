@@ -323,16 +323,17 @@ impl From<ScanResult> for PyScanResult {
 
 #[pyfunction(
     name = "count",
-    signature = (text, *, encoding = None, tokenizer_file = None, normalize = false)
+    signature = (text, *, encoding = None, model = None, tokenizer_file = None, normalize = false)
 )]
 fn count_text(
     py: Python<'_>,
     text: String,
     encoding: Option<&str>,
+    model: Option<&str>,
     tokenizer_file: Option<PathBuf>,
     normalize: bool,
 ) -> PyResult<PyCountResult> {
-    let options = count_options(encoding, tokenizer_file.as_deref(), normalize)?;
+    let options = count_options(encoding, model, tokenizer_file.as_deref(), normalize)?;
     let result = py
         .detach(move || core_count_text(&text, &options))
         .map_err(map_count_error)?;
@@ -351,6 +352,7 @@ fn count_text(
         path,
         *,
         encoding = None,
+        model = None,
         tokenizer_file = None,
         normalize = false,
         invalid_utf8 = "skip",
@@ -363,6 +365,7 @@ fn count_file(
     py: Python<'_>,
     path: PathBuf,
     encoding: Option<&str>,
+    model: Option<&str>,
     tokenizer_file: Option<PathBuf>,
     normalize: bool,
     invalid_utf8: &str,
@@ -371,6 +374,7 @@ fn count_file(
 ) -> PyResult<PyFileResult> {
     let options = scan_options(
         encoding,
+        model,
         tokenizer_file.as_deref(),
         normalize,
         invalid_utf8,
@@ -415,6 +419,7 @@ fn count_file(
         paths,
         *,
         encoding = None,
+        model = None,
         tokenizer_file = None,
         normalize = false,
         invalid_utf8 = "skip",
@@ -433,6 +438,7 @@ fn scan(
     py: Python<'_>,
     paths: &Bound<'_, PyAny>,
     encoding: Option<&str>,
+    model: Option<&str>,
     tokenizer_file: Option<PathBuf>,
     normalize: bool,
     invalid_utf8: &str,
@@ -448,6 +454,7 @@ fn scan(
     let paths = extract_paths(paths)?;
     let mut options = scan_options(
         encoding,
+        model,
         tokenizer_file.as_deref(),
         normalize,
         invalid_utf8,
@@ -472,12 +479,16 @@ fn scan(
 
 fn count_options(
     encoding: Option<&str>,
+    model: Option<&str>,
     tokenizer_file: Option<&std::path::Path>,
     normalize: bool,
 ) -> PyResult<CountOptions> {
-    if encoding.is_some() && tokenizer_file.is_some() {
+    let selector_count = usize::from(encoding.is_some())
+        + usize::from(model.is_some())
+        + usize::from(tokenizer_file.is_some());
+    if selector_count > 1 {
         return Err(ConfigurationError::new_err(
-            "encoding and tokenizer_file are mutually exclusive",
+            "encoding, model, and tokenizer_file are mutually exclusive",
         ));
     }
     let text_policy = if normalize {
@@ -485,22 +496,28 @@ fn count_options(
     } else {
         TextPolicy::Literal
     };
-    let options = match tokenizer_file {
-        Some(path) => CountOptions::for_tokenizer_file(path).map_err(map_tokenizer_error)?,
-        None => {
+    let options = match (encoding, model, tokenizer_file) {
+        (None, None, Some(path)) => {
+            CountOptions::for_tokenizer_file(path).map_err(map_tokenizer_error)?
+        }
+        (None, Some(model), None) => CountOptions::for_model(model).map_err(map_tokenizer_error)?,
+        (encoding, None, None) => {
             let encoding = encoding
                 .unwrap_or("o200k_base")
                 .parse::<BuiltinEncoding>()
                 .map_err(map_tokenizer_error)?;
             CountOptions::for_encoding(encoding)
         }
+        _ => unreachable!("selector count was validated above"),
     };
 
     Ok(options.with_text_policy(text_policy))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scan_options(
     encoding: Option<&str>,
+    model: Option<&str>,
     tokenizer_file: Option<&std::path::Path>,
     normalize: bool,
     invalid_utf8: &str,
@@ -518,7 +535,7 @@ fn scan_options(
         }
     };
     let max_file_size = max_file_size.map_or(MaxFileSize::Unlimited, MaxFileSize::Limited);
-    let mut options = ScanOptions::new(count_options(encoding, tokenizer_file, normalize)?)
+    let mut options = ScanOptions::new(count_options(encoding, model, tokenizer_file, normalize)?)
         .with_invalid_utf8(invalid_utf8)
         .with_max_file_size(max_file_size)
         .with_cache_enabled(!no_cache);
