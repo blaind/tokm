@@ -6,6 +6,7 @@ mod cache;
 mod classify;
 mod count;
 mod decode;
+mod diff;
 mod error;
 mod file;
 mod scan;
@@ -16,7 +17,8 @@ mod walk;
 pub use aggregate::{LanguageResult, ScanFileResult, ScanResult, ScanTotals, SkippedSummary};
 pub use classify::{Language, classify};
 pub use count::{CountOptions, CountResult, count_text};
-pub use error::{CountError, ScanError, TokenizerError};
+pub use diff::{DiffFileResult, DiffResult, LanguageDelta, TokenDelta, compare_snapshots};
+pub use error::{CountError, DiffError, ScanError, TokenizerError};
 pub use file::{
     ByteCountResult, ByteOutcome, ByteSkip, DEFAULT_MAX_FILE_SIZE, DEFAULT_MAX_WORKERS,
     FileOutcome, FileResult, InvalidUtf8Policy, MaxFileSize, ScanOptions, SkipDetail, SkipReason,

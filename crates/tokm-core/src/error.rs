@@ -48,6 +48,14 @@ pub enum CountError {
     Tokenizer(#[from] TokenizerError),
 }
 
+/// Two complete scan snapshots could not be compared safely.
+#[derive(Debug, Error)]
+pub enum DiffError {
+    /// Snapshot semantics differ, so their token totals are not comparable.
+    #[error("cannot compare snapshots with different {0}")]
+    IncompatibleSemantics(&'static str),
+}
+
 /// A recursive scan could not produce a trustworthy aggregate result.
 #[derive(Debug, Error)]
 pub enum ScanError {
