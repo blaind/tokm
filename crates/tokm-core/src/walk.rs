@@ -148,13 +148,13 @@ fn walk_error_path(error: &ignore::Error) -> Option<&Path> {
     }
 }
 
-struct Filters {
+pub(crate) struct Filters {
     includes: Option<GlobSet>,
     excludes: Option<GlobSet>,
 }
 
 impl Filters {
-    fn new(includes: &[String], excludes: &[String]) -> Result<Self, ScanError> {
+    pub(crate) fn new(includes: &[String], excludes: &[String]) -> Result<Self, ScanError> {
         Ok(Self {
             includes: compile_globs(includes)?,
             excludes: compile_globs(excludes)?,
@@ -163,7 +163,11 @@ impl Filters {
 
     fn admits(&self, path: &Path, current_directory: &Path) -> bool {
         let match_path = path.strip_prefix(current_directory).unwrap_or(path);
-        let match_path = forward_slash_path(match_path);
+        self.admits_relative(match_path)
+    }
+
+    pub(crate) fn admits_relative(&self, path: &Path) -> bool {
+        let match_path = forward_slash_path(path);
 
         if self
             .excludes

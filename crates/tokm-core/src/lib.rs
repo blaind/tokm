@@ -9,6 +9,8 @@ mod decode;
 mod diff;
 mod error;
 mod file;
+#[cfg(feature = "git")]
+pub mod git;
 mod scan;
 mod text_policy;
 pub mod tokenizer;
@@ -18,7 +20,7 @@ pub use aggregate::{LanguageResult, ScanFileResult, ScanResult, ScanTotals, Skip
 pub use classify::{Language, classify};
 pub use count::{CountOptions, CountResult, count_text};
 pub use diff::{DiffFileResult, DiffResult, LanguageDelta, TokenDelta, compare_snapshots};
-pub use error::{CountError, DiffError, ScanError, TokenizerError};
+pub use error::{CountError, DiffError, GitError, ScanError, TokenizerError};
 pub use file::{
     ByteCountResult, ByteOutcome, ByteSkip, DEFAULT_MAX_FILE_SIZE, DEFAULT_MAX_WORKERS,
     FileOutcome, FileResult, InvalidUtf8Policy, MaxFileSize, ScanOptions, SkipDetail, SkipReason,

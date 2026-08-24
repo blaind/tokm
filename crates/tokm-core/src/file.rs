@@ -68,7 +68,7 @@ impl Default for MaxFileSize {
 }
 
 impl MaxFileSize {
-    fn admits(self, bytes: u64) -> bool {
+    pub(crate) fn admits(self, bytes: u64) -> bool {
         match self {
             Self::Limited(limit) => bytes <= limit,
             Self::Unlimited => true,
