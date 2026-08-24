@@ -4,7 +4,7 @@ use std::{num::NonZeroUsize, path::PathBuf};
 
 use clap::{Parser, ValueEnum};
 use tokm_core::{
-    CountOptions, InvalidUtf8Policy, MaxFileSize, ScanOptions, TextPolicy,
+    CountOptions, InvalidUtf8Policy, MaxFileSize, ScanOptions, TextPolicy, TokenizerError,
     tokenizer::BuiltinEncoding,
 };
 
@@ -16,9 +16,18 @@ pub(crate) struct Args {
     #[arg(value_name = "PATH", default_value = ".")]
     pub(crate) paths: Vec<PathBuf>,
 
-    /// Select a built-in exact encoding.
-    #[arg(long, default_value = "o200k_base", value_parser = parse_encoding, help_heading = "Tokenizer")]
-    pub(crate) encoding: BuiltinEncoding,
+    /// Select a built-in exact encoding (default: o200k_base).
+    #[arg(long, value_parser = parse_encoding, conflicts_with = "tokenizer_file", help_heading = "Tokenizer")]
+    pub(crate) encoding: Option<BuiltinEncoding>,
+
+    /// Load a local Hugging Face tokenizer.json artifact.
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with = "encoding",
+        help_heading = "Tokenizer"
+    )]
+    pub(crate) tokenizer_file: Option<PathBuf>,
 
     /// Remove a leading UTF-8 BOM and normalize line endings.
     #[arg(long, help_heading = "Text")]
@@ -102,13 +111,17 @@ impl Args {
         Err("stdin (`-`) cannot be combined with filesystem paths".to_owned())
     }
 
-    pub(crate) fn scan_options(&self) -> ScanOptions {
+    pub(crate) fn scan_options(&self) -> Result<ScanOptions, TokenizerError> {
         let text_policy = if self.normalize {
             TextPolicy::Normalized
         } else {
             TextPolicy::Literal
         };
-        let count = CountOptions::for_encoding(self.encoding).with_text_policy(text_policy);
+        let count = match &self.tokenizer_file {
+            Some(path) => CountOptions::for_tokenizer_file(path)?,
+            None => CountOptions::for_encoding(self.encoding.unwrap_or_default()),
+        }
+        .with_text_policy(text_policy);
         let mut options = ScanOptions::new(count)
             .with_invalid_utf8(self.invalid_utf8.into())
             .with_max_file_size(self.max_file_size)
@@ -127,7 +140,7 @@ impl Args {
             options = options.with_workers(threads);
         }
 
-        options
+        Ok(options)
     }
 }
 
@@ -215,10 +228,14 @@ mod tests {
     #[test]
     fn defaults_are_stable_public_semantics() {
         let args = Args::try_parse_from(["tokm"]).unwrap();
-        let options = args.scan_options();
+        let options = args.scan_options().unwrap();
 
         assert_eq!(args.paths, [std::path::PathBuf::from(".")]);
-        assert_eq!(args.encoding, BuiltinEncoding::O200kBase);
+        assert_eq!(args.encoding, None);
+        assert_eq!(
+            options.count_options().tokenizer().metadata().name,
+            BuiltinEncoding::O200kBase.as_str()
+        );
         assert_eq!(options.count_options().text_policy(), TextPolicy::Literal);
         assert_eq!(options.invalid_utf8(), InvalidUtf8Policy::Skip);
         assert_eq!(
@@ -243,5 +260,18 @@ mod tests {
 
         assert_eq!(limited.max_file_size, MaxFileSize::Limited(3 * 1024 * 1024));
         assert_eq!(unlimited.max_file_size, MaxFileSize::Unlimited);
+    }
+
+    #[test]
+    fn tokenizer_selectors_are_mutually_exclusive() {
+        let result = Args::try_parse_from([
+            "tokm",
+            "--encoding",
+            "cl100k_base",
+            "--tokenizer-file",
+            "tokenizer.json",
+        ]);
+
+        assert!(result.is_err());
     }
 }

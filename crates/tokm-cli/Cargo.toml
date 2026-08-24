@@ -14,7 +14,7 @@ homepage = "https://crates.io/crates/tokm"
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokm-core.workspace = true
+tokm-core = { workspace = true, features = ["hf"] }
 
 [dev-dependencies]
 tempfile.workspace = true
