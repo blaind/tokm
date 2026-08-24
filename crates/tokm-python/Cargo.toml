@@ -16,7 +16,7 @@ extension-module = ["pyo3/extension-module"]
 
 [dependencies]
 pyo3.workspace = true
-tokm-core.workspace = true
+tokm-core = { workspace = true, features = ["hf"] }
 
 [lints.rust]
 missing_docs = "warn"

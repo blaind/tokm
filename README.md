@@ -102,6 +102,7 @@ assert count.tokens == 2
 
 file = tokm.count_file("README.md")
 result = tokm.scan(["src", "tests"], encoding="o200k_base")
+local = tokm.count("hello world", tokenizer_file="./tokenizer.json")
 
 print(file.tokens)
 print(result.total_tokens)
