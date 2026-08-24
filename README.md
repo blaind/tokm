@@ -99,6 +99,17 @@ decimal place from exact token and byte totals. JSON adds the same metrics benea
 `density` object. It does not retokenize content or change cache identity. `--density` cannot be
 combined with `--files`, `--dirs`, or Git diff.
 
+Render the recursive directory rollups as a hierarchy:
+
+```console
+tokm . --tree
+```
+
+Siblings are ordered by normalized path and totals are shown for complete subtrees. In JSON mode,
+`--tree` returns the same structured `directories` array as `--dirs`; terminal tree glyphs never
+enter machine-readable output. The tree view requires filesystem input and cannot be combined
+with another alternate view, an explicit `--sort`, or Git diff.
+
 Files larger than 20 MiB are skipped visibly. The limit accepts binary K/M/G suffixes.
 
 ```console
