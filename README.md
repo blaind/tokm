@@ -16,8 +16,8 @@ $ tokm .
  Total                 9  14,333   100.0%
 ```
 
-The first release series provides the Rust core library and native CLI. Python bindings, local
-Hugging Face `tokenizer.json` support, and Git tree diffs follow in later phases.
+The first release series provides the Rust core library, native CLI, and typed Python bindings.
+Local Hugging Face `tokenizer.json` support and Git tree diffs follow in later phases.
 
 ## Usage
 
@@ -89,6 +89,30 @@ tokm . --max-tokens 200000
 A successful scan may contain skipped files; omissions are explicit result data rather than an
 implicit failure.
 
+## Python API
+
+Python 3.11 and newer can call the same Rust engine directly. The extension uses the stable
+`abi3-py311` ABI and does not invoke the CLI as a subprocess.
+
+```python
+import tokm
+
+count = tokm.count("hello world")
+assert count.tokens == 2
+
+file = tokm.count_file("README.md")
+result = tokm.scan(["src", "tests"], encoding="o200k_base")
+
+print(file.tokens)
+print(result.totals.tokens)
+print(result.languages["Rust"].tokens)
+```
+
+`count_file()` and `scan()` expose the same normalization, invalid UTF-8, size-limit, ignore,
+filtering, thread, and cache policies as the Rust core. Per-file omissions are returned as typed
+skip data; invalid options and explicit input failures raise typed exceptions. Native measurement
+releases the GIL.
+
 ## Cache
 
 Persistent caching is enabled by default and shared by native consumers. Disable it with
@@ -145,6 +169,18 @@ Install the development CLI directly from the workspace:
 
 ```console
 cargo install --path crates/tokm-cli --locked
+```
+
+Build and test the Python package with maturin:
+
+```console
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install 'maturin>=1.7,<2' pytest mypy ruff
+maturin develop --locked --release
+python -m pytest
+ruff check python
+mypy
 ```
 
 ## License
