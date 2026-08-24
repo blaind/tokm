@@ -153,6 +153,17 @@ Human output reports utilization and either remaining tokens or the amount excee
 separate `context` object containing the window, utilization percentage, remaining tokens, and
 exceeded tokens. For `tokm diff`, the comparison applies to the head snapshot.
 
+Estimate input cost using an explicit USD price per million tokens:
+
+```console
+tokm . --price-input 1.25
+```
+
+Pricing is supplied by the user; `tokm` does not maintain or fetch provider prices. Calculations
+use fixed-point decimal arithmetic and apply to the measured total, or to the head snapshot for a
+Git diff. JSON returns the currency, price, and estimate as exact decimal strings in a separate
+`cost` object.
+
 | Exit | Meaning |
 | ---: | --- |
 | 0 | Successful measurement |
