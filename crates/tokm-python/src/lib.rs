@@ -292,6 +292,14 @@ struct PyScanResult {
     skipped: PySkippedSummary,
 }
 
+#[pymethods]
+impl PyScanResult {
+    #[getter]
+    const fn total_tokens(&self) -> u64 {
+        self.totals.tokens
+    }
+}
+
 impl From<ScanResult> for PyScanResult {
     fn from(result: ScanResult) -> Self {
         let invalid_utf8 = result.invalid_utf8;

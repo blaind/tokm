@@ -47,6 +47,7 @@ def test_scan_returns_mapping_and_native_aggregation(tmp_path: Path) -> None:
     result = tokm.scan(tmp_path, no_cache=True)
 
     assert result.totals.files == 2
+    assert result.total_tokens == result.totals.tokens
     assert result.totals.tokens == sum(file.tokens for file in result.files)
     assert result.languages["Rust"].files == 1
     assert result.languages["Markdown"].files == 1
