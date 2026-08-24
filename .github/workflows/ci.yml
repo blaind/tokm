@@ -49,6 +49,23 @@ jobs:
       - run: cargo check --locked --workspace --all-features
       - run: cargo check --locked --package tokm-core --no-default-features
 
+  portability:
+    name: Rust tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: portability-${{ runner.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo test --locked --package tokm-core --package tokm --all-features
+
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 15
