@@ -11,6 +11,26 @@ pub enum TokenizerError {
     #[error("unsupported encoding: {0}")]
     UnsupportedEncoding(String),
 
+    /// A local tokenizer artifact could not be read.
+    #[error("cannot read tokenizer artifact {path}: {message}")]
+    ArtifactRead {
+        /// Path supplied by the caller.
+        path: PathBuf,
+
+        /// Underlying operating-system error.
+        message: String,
+    },
+
+    /// A local tokenizer artifact could not be parsed.
+    #[error("invalid tokenizer artifact {path}: {message}")]
+    ArtifactInvalid {
+        /// Path supplied by the caller.
+        path: PathBuf,
+
+        /// Artifact parser error.
+        message: String,
+    },
+
     /// A backend returned a count that does not fit the public result type.
     #[error("token count does not fit in u64")]
     CountOverflow,

@@ -2,6 +2,8 @@
 
 #[cfg(feature = "builtin-tokenizers")]
 mod builtin;
+#[cfg(feature = "hf")]
+mod huggingface;
 
 use serde::Serialize;
 
@@ -9,6 +11,8 @@ use crate::TokenizerError;
 
 #[cfg(feature = "builtin-tokenizers")]
 pub use builtin::{BuiltinEncoding, BuiltinTokenCounter};
+#[cfg(feature = "hf")]
+pub use huggingface::HuggingFaceTokenCounter;
 
 /// Whether a tokenizer reproduces a reference definition or estimates it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

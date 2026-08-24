@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+#[cfg(feature = "hf")]
+use crate::tokenizer::HuggingFaceTokenCounter;
 #[cfg(feature = "builtin-tokenizers")]
 use crate::tokenizer::{BuiltinEncoding, BuiltinTokenCounter};
 use crate::{
@@ -33,6 +35,14 @@ impl CountOptions {
     #[must_use]
     pub fn for_encoding(encoding: BuiltinEncoding) -> Self {
         Self::new(Arc::new(BuiltinTokenCounter::new(encoding)))
+    }
+
+    /// Construct options from a local Hugging Face `tokenizer.json` artifact.
+    #[cfg(feature = "hf")]
+    pub fn for_tokenizer_file(
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<Self, crate::TokenizerError> {
+        HuggingFaceTokenCounter::from_file(path).map(|counter| Self::new(Arc::new(counter)))
     }
 
     /// Select the transformation applied before tokenization.
