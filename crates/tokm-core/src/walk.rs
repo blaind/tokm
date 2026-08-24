@@ -204,9 +204,7 @@ fn compile_globs(patterns: &[String]) -> Result<Option<GlobSet>, ScanError> {
     Ok(Some(set))
 }
 
-fn forward_slash_path(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
+pub(crate) fn forward_slash_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/")
 }
