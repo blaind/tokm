@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 description = "Python bindings for tokm-core"
+readme = "../../README.md"
+keywords = ["tokenizer", "tokens", "python"]
+categories = ["api-bindings", "development-tools"]
+homepage = "https://pypi.org/project/tokm/"
 
 [lib]
 name = "_tokm"
