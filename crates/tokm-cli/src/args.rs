@@ -2,7 +2,7 @@
 
 use std::{num::NonZeroUsize, path::PathBuf};
 
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 use tokm_core::{
     CountOptions, InvalidUtf8Policy, MaxFileSize, ScanOptions, TextPolicy, TokenizerError,
     tokenizer::BuiltinEncoding,
@@ -12,17 +12,22 @@ use tokm_core::{
 #[derive(Clone, Debug, Parser)]
 #[command(version, about)]
 pub(crate) struct Args {
+    /// Select a specialized measurement command.
+    #[command(subcommand)]
+    pub(crate) command: Option<Command>,
+
     /// Files, directories, or `-` for stdin.
     #[arg(value_name = "PATH", default_value = ".")]
     pub(crate) paths: Vec<PathBuf>,
 
     /// Select a built-in exact encoding (default: o200k_base).
-    #[arg(long, value_parser = parse_encoding, conflicts_with = "tokenizer_file", help_heading = "Tokenizer")]
+    #[arg(long, global = true, value_parser = parse_encoding, conflicts_with = "tokenizer_file", help_heading = "Tokenizer")]
     pub(crate) encoding: Option<BuiltinEncoding>,
 
     /// Load a local Hugging Face tokenizer.json artifact.
     #[arg(
         long,
+        global = true,
         value_name = "PATH",
         conflicts_with = "encoding",
         help_heading = "Tokenizer"
@@ -30,68 +35,117 @@ pub(crate) struct Args {
     pub(crate) tokenizer_file: Option<PathBuf>,
 
     /// Remove a leading UTF-8 BOM and normalize line endings.
-    #[arg(long, help_heading = "Text")]
+    #[arg(long, global = true, help_heading = "Text")]
     pub(crate) normalize: bool,
 
     /// Select invalid UTF-8 handling.
-    #[arg(long, value_enum, default_value_t, help_heading = "Text")]
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value_t,
+        help_heading = "Text"
+    )]
     pub(crate) invalid_utf8: InvalidUtf8Arg,
 
     /// Show per-file results instead of language totals.
-    #[arg(long, help_heading = "Display")]
+    #[arg(long, global = true, help_heading = "Display")]
     pub(crate) files: bool,
 
     /// Select the output format.
-    #[arg(long, value_enum, default_value_t, help_heading = "Display")]
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value_t,
+        help_heading = "Display"
+    )]
     pub(crate) format: OutputFormat,
 
     /// Sort per-file results.
-    #[arg(long, value_enum, default_value_t, help_heading = "Display")]
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value_t,
+        help_heading = "Display"
+    )]
     pub(crate) sort: SortField,
 
     /// Include paths matching this glob; may be repeated.
-    #[arg(long, value_name = "GLOB", help_heading = "Filtering")]
+    #[arg(long, global = true, value_name = "GLOB", help_heading = "Filtering")]
     pub(crate) include: Vec<String>,
 
     /// Exclude paths matching this glob; may be repeated.
-    #[arg(long, value_name = "GLOB", help_heading = "Filtering")]
+    #[arg(long, global = true, value_name = "GLOB", help_heading = "Filtering")]
     pub(crate) exclude: Vec<String>,
 
     /// Include hidden paths.
-    #[arg(long, help_heading = "Filtering")]
+    #[arg(long, global = true, help_heading = "Filtering")]
     pub(crate) hidden: bool,
 
     /// Disable ignore-file processing.
-    #[arg(long, help_heading = "Filtering")]
+    #[arg(long, global = true, help_heading = "Filtering")]
     pub(crate) no_ignore: bool,
 
     /// Follow symbolic links.
-    #[arg(long, help_heading = "Filtering")]
+    #[arg(long, global = true, help_heading = "Filtering")]
     pub(crate) follow: bool,
 
     /// Fail when the total exceeds this token budget.
-    #[arg(long, value_name = "TOKENS", help_heading = "Limits")]
+    #[arg(long, global = true, value_name = "TOKENS", help_heading = "Limits")]
     pub(crate) max_tokens: Option<u64>,
 
     /// Set the individual-file byte limit, or `unlimited`.
-    #[arg(long, default_value = "20M", value_parser = parse_file_size, help_heading = "Limits")]
+    #[arg(long, global = true, default_value = "20M", value_parser = parse_file_size, help_heading = "Limits")]
     pub(crate) max_file_size: MaxFileSize,
 
     /// Disable the persistent local cache.
-    #[arg(long, help_heading = "Performance")]
+    #[arg(long, global = true, help_heading = "Performance")]
     pub(crate) no_cache: bool,
 
     /// Bound concurrent file workers.
-    #[arg(short = 'j', long, value_name = "N", help_heading = "Performance")]
+    #[arg(
+        short = 'j',
+        long,
+        global = true,
+        value_name = "N",
+        help_heading = "Performance"
+    )]
     pub(crate) threads: Option<NonZeroUsize>,
 
     /// List skipped paths on stderr.
-    #[arg(short, long, conflicts_with = "quiet", help_heading = "Diagnostics")]
+    #[arg(
+        short,
+        long,
+        global = true,
+        conflicts_with = "quiet",
+        help_heading = "Diagnostics"
+    )]
     pub(crate) verbose: bool,
 
     /// Suppress successful human-readable output.
-    #[arg(short, long, conflicts_with = "verbose", help_heading = "Diagnostics")]
+    #[arg(
+        short,
+        long,
+        global = true,
+        conflicts_with = "verbose",
+        help_heading = "Diagnostics"
+    )]
     pub(crate) quiet: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
+pub(crate) enum Command {
+    /// Compare complete-file token footprints across Git snapshots.
+    Diff {
+        /// BASE for a worktree comparison, or A..B for two committed trees.
+        comparison: String,
+
+        /// Discover the Git repository from this path.
+        #[arg(long, default_value = ".", value_name = "PATH")]
+        repository: PathBuf,
+    },
 }
 
 impl Args {
@@ -223,7 +277,7 @@ mod tests {
     use clap::Parser;
     use tokm_core::{InvalidUtf8Policy, MaxFileSize, TextPolicy, tokenizer::BuiltinEncoding};
 
-    use super::{Args, InputMode};
+    use super::{Args, Command, InputMode, OutputFormat};
 
     #[test]
     fn defaults_are_stable_public_semantics() {
@@ -273,5 +327,26 @@ mod tests {
         ]);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn diff_subcommand_accepts_global_measurement_options() {
+        let args = Args::try_parse_from([
+            "tokm",
+            "diff",
+            "HEAD",
+            "--format",
+            "json",
+            "--encoding",
+            "cl100k_base",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            args.command,
+            Some(Command::Diff { comparison, .. }) if comparison == "HEAD"
+        ));
+        assert_eq!(args.format, OutputFormat::Json);
+        assert_eq!(args.encoding, Some(BuiltinEncoding::Cl100kBase));
     }
 }

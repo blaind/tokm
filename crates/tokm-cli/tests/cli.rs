@@ -268,6 +268,107 @@ fn budget_quiet_and_usage_exit_codes_are_stable() {
     assert_eq!(missing.status.code(), Some(1));
 }
 
+#[test]
+fn git_diff_supports_worktree_and_two_tree_forms() {
+    let directory = tempdir().unwrap();
+    git(directory.path(), &["init", "--quiet"]);
+    git(directory.path(), &["config", "user.name", "tokm tests"]);
+    git(
+        directory.path(),
+        &["config", "user.email", "tokm@example.invalid"],
+    );
+    fs::create_dir(directory.path().join("src")).unwrap();
+    fs::write(directory.path().join(".gitignore"), "ignored.rs\n").unwrap();
+    fs::write(directory.path().join("src/lib.rs"), "one").unwrap();
+    git(directory.path(), &["add", "."]);
+    git(directory.path(), &["commit", "--quiet", "-m", "base"]);
+    let base = git_stdout(directory.path(), &["rev-parse", "HEAD"]);
+
+    fs::write(directory.path().join("src/lib.rs"), "one two").unwrap();
+    fs::write(directory.path().join("notes.md"), "untracked notes").unwrap();
+    fs::write(directory.path().join("ignored.rs"), "ignored").unwrap();
+    let worktree = tokm()
+        .args(["diff", &base, "--format", "json", "--repository"])
+        .arg(directory.path())
+        .output()
+        .unwrap();
+    let repeated = tokm()
+        .args(["diff", &base, "--format", "json", "--repository"])
+        .arg(directory.path())
+        .output()
+        .unwrap();
+    let worktree_json = parse_json(&worktree);
+    let paths = worktree_json["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["path"].as_str().unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(worktree.stdout, repeated.stdout);
+    assert!(worktree.stderr.is_empty());
+    assert_eq!(worktree_json["report"], "diff");
+    assert_eq!(worktree_json["snapshots"]["base"]["name"], base);
+    assert_eq!(worktree_json["snapshots"]["head"]["name"], "worktree");
+    assert_eq!(paths, ["notes.md", "src/lib.rs"]);
+    assert!(!paths.contains(&"ignored.rs"));
+
+    git(directory.path(), &["add", "."]);
+    git(directory.path(), &["commit", "--quiet", "-m", "head"]);
+    let head = git_stdout(directory.path(), &["rev-parse", "HEAD"]);
+    let comparison = format!("{base}..{head}");
+    let trees = tokm()
+        .args(["diff", &comparison, "--format", "json", "--repository"])
+        .arg(directory.path())
+        .output()
+        .unwrap();
+    let trees_json = parse_json(&trees);
+    let human = tokm()
+        .args(["diff", &comparison, "--files", "--repository"])
+        .arg(directory.path())
+        .output()
+        .unwrap();
+
+    assert_eq!(trees_json["snapshots"]["base"]["name"], base);
+    assert_eq!(trees_json["snapshots"]["head"]["name"], head);
+    assert_eq!(trees_json["tokens"]["net"], worktree_json["tokens"]["net"]);
+    assert!(
+        String::from_utf8(human.stdout)
+            .unwrap()
+            .contains("Token delta")
+    );
+
+    let malformed = tokm()
+        .args(["diff", "HEAD...HEAD", "--repository"])
+        .arg(directory.path())
+        .output()
+        .unwrap();
+    assert_eq!(malformed.status.code(), Some(2));
+}
+
+fn git(directory: &std::path::Path, arguments: &[&str]) {
+    let output = Command::new("git")
+        .args(["-C", directory.to_str().unwrap()])
+        .args(arguments)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn git_stdout(directory: &std::path::Path, arguments: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(["-C", directory.to_str().unwrap()])
+        .args(arguments)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
 #[cfg(unix)]
 #[test]
 fn concurrent_processes_share_one_cache_safely() {
